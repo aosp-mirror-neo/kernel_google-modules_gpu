@@ -32,6 +32,8 @@
 #include "pixel_gpu_trace.h"
 #include <trace/events/power.h>
 
+#include <soc/google/gs_tmu_v3.h>
+
 /*
  * GPU_PM_DOMAIN_NAMES - names for GPU power domains.
  *
@@ -255,6 +257,7 @@ static int gpu_pm_power_on_top_nolock(struct kbase_device *kbdev)
 
 	pm_runtime_get_sync(pc->pm.domain_devs[GPU_PM_DOMAIN_TOP]);
 	pm_runtime_get_sync(pc->pm.domain_devs[GPU_PM_DOMAIN_CORES]);
+	pm_runtime_get_sync(kbdev->dev);
 	/*
 	 * We determine whether GPU state was lost by detecting whether the GPU state reached
 	 * GPU_POWER_LEVEL_OFF before we entered this function. The GPU state is set to be
@@ -269,6 +272,8 @@ static int gpu_pm_power_on_top_nolock(struct kbase_device *kbdev)
 	ret = (pc->pm.state == GPU_POWER_LEVEL_OFF);
 
 	gpu_dvfs_enable_updates(kbdev);
+	if (set_acpm_tj_power_status(TZ_GPU, true))
+		dev_err(kbdev->dev, "Failed to set Tj power on status\n");
 #ifdef CONFIG_MALI_MIDGARD_DVFS
 	kbase_pm_metrics_start(kbdev);
 	gpu_dvfs_event_power_on(kbdev);
@@ -336,6 +341,7 @@ static void gpu_pm_power_off_top_nolock(struct kbase_device *kbdev)
 #endif
 
 	if (pc->pm.state == GPU_POWER_LEVEL_STACKS) {
+		pm_runtime_put_sync(kbdev->dev);
 		pm_runtime_put_sync(pc->pm.domain_devs[GPU_PM_DOMAIN_CORES]);
 		pc->pm.state = GPU_POWER_LEVEL_GLOBAL;
 	}
@@ -349,6 +355,8 @@ static void gpu_pm_power_off_top_nolock(struct kbase_device *kbdev)
 
 		gpu_dvfs_disable_updates(kbdev);
 
+		if (set_acpm_tj_power_status(TZ_GPU, false))
+			dev_err(kbdev->dev, "Failed to set Tj power off status\n");
 		if (pc->pm.use_autosuspend) {
 			pm_runtime_mark_last_busy(pc->pm.domain_devs[GPU_PM_DOMAIN_TOP]);
 			pm_runtime_put_autosuspend(pc->pm.domain_devs[GPU_PM_DOMAIN_TOP]);
@@ -484,9 +492,11 @@ static int gpu_pm_callback_power_runtime_init(struct kbase_device *kbdev)
 	struct pixel_context *pc = kbdev->platform_context;
 
 	dev_dbg(kbdev->dev, "%s\n", __func__);
+	pm_runtime_enable(kbdev->dev);
 
 	if (!pm_runtime_enabled(pc->pm.domain_devs[GPU_PM_DOMAIN_TOP]) ||
-		!pm_runtime_enabled(pc->pm.domain_devs[GPU_PM_DOMAIN_CORES])) {
+		!pm_runtime_enabled(pc->pm.domain_devs[GPU_PM_DOMAIN_CORES]) ||
+		!pm_runtime_enabled(kbdev->dev)) {
 		dev_warn(kbdev->dev, "pm_runtime not enabled\n");
 		return -ENOSYS;
 	}
@@ -517,6 +527,7 @@ static void gpu_pm_callback_power_runtime_term(struct kbase_device *kbdev)
 
 	pm_runtime_disable(pc->pm.domain_devs[GPU_PM_DOMAIN_CORES]);
 	pm_runtime_disable(pc->pm.domain_devs[GPU_PM_DOMAIN_TOP]);
+	pm_runtime_disable(kbdev->dev);
 }
 
 #endif /* IS_ENABLED(KBASE_PM_RUNTIME) */
@@ -723,6 +734,31 @@ bool gpu_pm_get_power_state(struct kbase_device *kbdev)
 	return ret;
 }
 
+#if IS_ENABLED(CONFIG_GOOGLE_BCL)
+static int google_bcl_callback(struct notifier_block *nb, unsigned long max_clk, void *data) {
+	struct pixel_context *pc = container_of(nb, struct pixel_context, pm.qos_nb);
+	struct kbase_device *kbdev = pc->kbdev;
+	int max_level = -1;
+	int level;
+
+	CSTD_UNUSED(data);
+
+	// Find the throttling level that satisfies the requested maximum clock frequency.
+	for (level = 0; level < pc->dvfs.table_size; level++) {
+		max_level = level;
+		if (pc->dvfs.table[level].clk[GPU_DVFS_CLK_SHADERS] <= max_clk)
+			break;
+	}
+
+	mutex_lock(&pc->dvfs.lock);
+	gpu_dvfs_update_level_lock(kbdev, GPU_DVFS_LEVEL_LOCK_BCL, -1, max_level);
+	gpu_dvfs_select_level(kbdev);
+	mutex_unlock(&pc->dvfs.lock);
+
+	return NOTIFY_OK;
+}
+#endif /* CONFIG_GOOGLE_BCL */
+
 /**
  * gpu_pm_init() - Initializes power management control for a GPU.
  *
@@ -820,6 +856,10 @@ int gpu_pm_init(struct kbase_device *kbdev)
 
 #if IS_ENABLED(CONFIG_GOOGLE_BCL)
 	pc->pm.bcl_dev = google_retrieve_bcl_handle();
+	if (pc->pm.bcl_dev) {
+		pc->pm.qos_nb.notifier_call = google_bcl_callback;
+		exynos_pm_qos_add_notifier(PM_QOS_GPU_FREQ_MAX, &pc->pm.qos_nb);
+	}
 #endif
 
 	pc->pm.rail_state_log = gpu_pm_rail_state_log_init(kbdev);
@@ -845,6 +885,12 @@ void gpu_pm_term(struct kbase_device *kbdev)
 	int i;
 
 	gpu_pm_rail_state_log_term(pc->pm.rail_state_log);
+
+#if IS_ENABLED(CONFIG_GOOGLE_BCL)
+	if (pc->pm.bcl_dev) {
+		exynos_pm_qos_remove_notifier(PM_QOS_GPU_FREQ_MAX, &pc->pm.qos_nb);
+	}
+#endif
 
 	for (i = 0; i < GPU_PM_DOMAIN_COUNT; i++) {
 		if (pc->pm.domain_devs[i]) {
