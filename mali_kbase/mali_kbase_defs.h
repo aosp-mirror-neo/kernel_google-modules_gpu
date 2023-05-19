@@ -163,8 +163,7 @@
 /* Maximum number of pages of memory that require a permanent mapping, per
  * kbase_context
  */
-#define KBASE_PERMANENTLY_MAPPED_MEM_LIMIT_PAGES ((32 * 1024ul * 1024ul) >> \
-								PAGE_SHIFT)
+#define KBASE_PERMANENTLY_MAPPED_MEM_LIMIT_PAGES ((64 * 1024ul * 1024ul) >> PAGE_SHIFT)
 /* Minimum threshold period for hwcnt dumps between different hwcnt virtualizer
  * clients, to reduce undesired system load.
  * If a virtualizer client requests a dump within this threshold period after
@@ -441,7 +440,7 @@ struct kbase_clk_rate_trace_manager {
  * @clk_rtm: The state of the GPU clock rate trace manager
  */
 struct kbase_pm_device_data {
-	struct mutex lock;
+	struct rt_mutex lock;
 	int active_count;
 	bool suspending;
 #if MALI_USE_CSF
@@ -1286,7 +1285,7 @@ struct kbase_device {
 	bool dummy_job_wa_loaded;
 
 #ifdef CONFIG_MALI_ARBITER_SUPPORT
-		struct kbase_arbiter_device arb;
+	struct kbase_arbiter_device arb;
 #endif
 	/* Priority Control Manager device */
 	struct priority_control_manager_device *pcm_dev;
@@ -1294,6 +1293,10 @@ struct kbase_device {
 	struct notifier_block oom_notifier_block;
 
 	struct kobject *proc_sysfs_node;
+
+#ifdef CONFIG_MALI_PM_RUNTIME_S2MPU_CONTROL
+	struct device *s2mpu_dev;
+#endif /* CONFIG_MALI_PM_RUNTIME_S2MPU_CONTROL */
 };
 
 /**
