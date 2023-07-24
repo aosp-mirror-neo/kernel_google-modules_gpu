@@ -1665,10 +1665,10 @@ static struct kbase_va_region *kbase_mem_from_user_buffer(
 	if (pages != NULL) {
 		faulted_pages =
 			pin_user_pages(address, *va_pages,
-				write ? FOLL_WRITE | FOLL_LONGTERM : FOLL_LONGTERM, pages, NULL);
+				write ? FOLL_WRITE | FOLL_LONGTERM : FOLL_LONGTERM, pages);
 	} else {
 		faulted_pages =
-			get_user_pages(address, *va_pages, write ? FOLL_WRITE : 0, pages, NULL);
+			get_user_pages(address, *va_pages, write ? FOLL_WRITE : 0, pages);
 	}
 #endif
 
