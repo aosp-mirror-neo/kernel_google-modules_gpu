@@ -90,7 +90,7 @@ struct firmware_trace_buffer {
 	} cpu_va;
 	u32 num_pages;
 	u32 trace_enable_init_mask[CSF_FIRMWARE_TRACE_ENABLE_INIT_MASK_MAX];
-	char name[1]; /* this field must be last */
+	char name[];
 };
 
 /**
@@ -265,9 +265,8 @@ int kbase_csf_firmware_parse_trace_buffer_entry(struct kbase_device *kbdev,
 	/* Allocate enough space for struct firmware_trace_buffer and the
 	 * trace buffer name (with NULL termination).
 	 */
-	trace_buffer =
-		kmalloc(struct_size(trace_buffer, name, (name_len - 1) + 1),
-			GFP_KERNEL);
+	trace_buffer = kmalloc(struct_size(trace_buffer, name, name_len + 1),
+			       GFP_KERNEL);
 
 	if (!trace_buffer)
 		return -ENOMEM;
