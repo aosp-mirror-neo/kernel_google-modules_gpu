@@ -1440,7 +1440,6 @@ static int kbase_ext_res_prepare(struct kbase_jd_atom *katom)
 	__user struct base_external_resource_list *user_ext_res;
 	struct base_external_resource_list *ext_res;
 	u64 count = 0;
-	size_t copy_size;
 
 	user_ext_res = (__user struct base_external_resource_list *)
 			(uintptr_t) katom->jc;
@@ -1457,9 +1456,8 @@ static int kbase_ext_res_prepare(struct kbase_jd_atom *katom)
 		return -EINVAL;
 
 	/* Copy the information for safe access and future storage */
-	copy_size = sizeof(*ext_res);
-	copy_size += sizeof(struct base_external_resource) * (count - 1);
-	ext_res = memdup_user(user_ext_res, copy_size);
+	ext_res = memdup_user(user_ext_res,
+			      struct_size(ext_res, ext_res, count - 1));
 	if (IS_ERR(ext_res))
 		return PTR_ERR(ext_res);
 
