@@ -265,7 +265,8 @@ int kbase_csf_firmware_parse_trace_buffer_entry(struct kbase_device *kbdev,
 	 * trace buffer name (with NULL termination).
 	 */
 	trace_buffer =
-		kmalloc(sizeof(*trace_buffer) + name_len + 1, GFP_KERNEL);
+		kmalloc(struct_size(trace_buffer, name, (name_len - 1) + 1),
+			GFP_KERNEL);
 
 	if (!trace_buffer)
 		return -ENOMEM;
