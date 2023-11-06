@@ -102,9 +102,6 @@ static void gpu_dvfs_metrics_trace_clock(struct kbase_device *kbdev, int old_lev
 		}
 
 	}
-
-	trace_gpu_frequency(clks[GPU_DVFS_CLK_TOP_LEVEL], 0);
-	trace_gpu_frequency(clks[GPU_DVFS_CLK_SHADERS], 1);
 }
 
 /**
@@ -251,13 +248,6 @@ void gpu_dvfs_metrics_work_begin(void* param)
 	*work_stats = uid_stats;
 
 	spin_unlock_irqrestore(&pc->dvfs.metrics.lock, flags);
-
-	/*
-	 * pixel: b/286347415#comment16: start/end time reporting to
-	 * be moved away.
-	 */
-	trace_gpu_work_period(0 /* gpu_id */, uid_stats->uid.val,
-		curr, curr + 1, 1 /* total_active_duration_ns */);
 }
 
 void gpu_dvfs_metrics_work_end(void *param)
