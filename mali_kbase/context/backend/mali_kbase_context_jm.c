@@ -36,11 +36,13 @@
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 #include <mali_kbase_debug_mem_view.h>
+#include <mali_kbase_debug_mem_zones.h>
 #include <mali_kbase_mem_pool_debugfs.h>
 
 void kbase_context_debugfs_init(struct kbase_context *const kctx)
 {
 	kbase_debug_mem_view_init(kctx);
+	kbase_debug_mem_zones_init(kctx);
 	kbase_mem_pool_debugfs_init(kctx->kctx_dentry, kctx);
 	kbase_jit_debugfs_init(kctx);
 	kbasep_jd_debugfs_ctx_init(kctx);
@@ -157,11 +159,11 @@ static const struct kbase_context_init context_init[] = {
 	  kbase_debug_job_fault_context_term,
 	  "Job fault context initialization failed" },
 #endif
+	{ kbasep_platform_context_init, kbasep_platform_context_term,
+	  "Platform callback for kctx initialization failed" },
 	{ NULL, kbase_context_flush_jobs, NULL },
 	{ kbase_context_add_to_dev_list, kbase_context_remove_from_dev_list,
 	  "Adding kctx to device failed" },
-	{ kbasep_platform_context_init, kbasep_platform_context_term,
-	  "Platform callback for kctx initialization failed" },
 };
 
 static void kbase_context_term_partial(

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2022 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -149,17 +149,18 @@ void kbase_gpu_report_bus_fault_and_kill(struct kbase_context *kctx,
 					"true" : "false";
 	int as_no = as->number;
 	unsigned long flags;
+	const uintptr_t fault_addr = fault->addr;
 
 	/* terminal fault, print info about the fault */
 	dev_err(kbdev->dev,
-		"GPU bus fault in AS%d at VA 0x%016llX\n"
-		"VA_VALID: %s\n"
+		"GPU bus fault in AS%d at PA %pK\n"
+		"PA_VALID: %s\n"
 		"raw fault status: 0x%X\n"
 		"exception type 0x%X: %s\n"
 		"access type 0x%X: %s\n"
 		"source id 0x%X\n"
 		"pid: %d\n",
-		as_no, fault->addr,
+		as_no, (void *)fault_addr,
 		addr_valid,
 		status,
 		exception_type, kbase_gpu_exception_name(exception_type),
