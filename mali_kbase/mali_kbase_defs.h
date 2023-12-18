@@ -1856,7 +1856,7 @@ struct kbase_context {
 
 	struct kbase_mem_pool_group mem_pools;
 
-	struct shrinker         reclaim;
+	struct shrinker         *reclaim;
 	struct list_head        evict_list;
 	atomic_t evict_nents;
 
