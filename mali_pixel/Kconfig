@@ -25,8 +25,22 @@ config MALI_MEMORY_GROUP_MANAGER
 	  for allocation and release of pages for memory pools managed by Mali GPU
 	  device drivers.
 
+config MALI_MEMORY_GROUP_MANAGER_DEBUG_FS
+	depends on MALI_MEMORY_GROUP_MANAGER && DEBUG_FS
+	bool "Enable Mali memory group manager debugfs nodes"
+	default n
+	help
+	  Enables support for memory group manager debugfs nodes
+
 config MALI_PRIORITY_CONTROL_MANAGER
 	tristate "MALI_PRIORITY_CONTROL_MANAGER"
 	help
 	  This option enables an implementation of a priority control manager
 	  for determining the target GPU scheduling priority of a process.
+
+config MALI_PROTECTED_MEMORY_ALLOCATOR
+	tristate "MALI_PROTECTED_MEMORY_ALLOCATOR"
+	help
+	  This option enables an implementation of a protected memory allocator
+	  for allocation and release of pages of protected memory for use by
+	  Mali GPU device drivers.

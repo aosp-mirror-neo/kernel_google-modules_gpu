@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2018-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2018-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -25,7 +25,16 @@
 #include <linux/types.h>
 
 #define CSF_FIRMWARE_TRACE_ENABLE_INIT_MASK_MAX (4)
-#define FW_TRACE_BUF_NAME "fwlog"
+#define FW_TRACE_BUF_NR_PAGES 4
+#if MALI_UNIT_TEST
+#define KBASE_CSFFW_UTF_BUF_NAME "fwutf"
+#endif
+#define KBASE_CSFFW_LOG_BUF_NAME "fwlog"
+#define KBASE_CSFFW_BENCHMARK_BUF_NAME "benchmark"
+#define KBASE_CSFFW_TIMELINE_BUF_NAME "timeline"
+#if IS_ENABLED(CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD)
+#define KBASE_CSFFW_GPU_METRICS_BUF_NAME "gpu_metrics"
+#endif /* CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD */
 
 /* Forward declarations */
 struct firmware_trace_buffer;
@@ -58,7 +67,7 @@ struct kbase_device;
 int kbase_csf_firmware_trace_buffers_init(struct kbase_device *kbdev);
 
 /**
- * kbase_csf_firmware_trace_buffer_term - Terminate trace buffers
+ * kbase_csf_firmware_trace_buffers_term - Terminate trace buffers
  *
  * @kbdev: Device pointer
  */
@@ -116,7 +125,8 @@ struct firmware_trace_buffer *kbase_csf_firmware_get_trace_buffer(
 	struct kbase_device *kbdev, const char *name);
 
 /**
- * kbase_csf_firmware_trace_buffer_get_trace_enable_bits_count - Get number of trace enable bits for a trace buffer
+ * kbase_csf_firmware_trace_buffer_get_trace_enable_bits_count - Get number of trace enable bits
+ *                                                               for a trace buffer
  *
  * @trace_buffer: Trace buffer handle
  *
@@ -165,15 +175,32 @@ bool kbase_csf_firmware_trace_buffer_is_empty(
 unsigned int kbase_csf_firmware_trace_buffer_read_data(
 	struct firmware_trace_buffer *trace_buffer, u8 *data, unsigned int num_bytes);
 
-#if IS_ENABLED(CONFIG_DEBUG_FS)
 /**
- * kbase_csf_fw_trace_buffer_debugfs_init() - Add debugfs entries for setting
- *                                         enable mask and dumping the binary
- *                                         firmware trace buffer
+ * kbase_csf_firmware_trace_buffer_discard - Discard data from a trace buffer
  *
- * @kbdev: Pointer to the device
+ * @trace_buffer: Trace buffer handle
+ *
+ * Discard part of the data in the trace buffer to reduce its utilization to half of its size.
  */
-void kbase_csf_firmware_trace_buffer_debugfs_init(struct kbase_device *kbdev);
-#endif /* CONFIG_DEBUG_FS */
+void kbase_csf_firmware_trace_buffer_discard(struct firmware_trace_buffer *trace_buffer);
+
+/**
+ * kbase_csf_firmware_trace_buffer_get_active_mask64 - Get trace buffer active mask
+ *
+ * @tb: Trace buffer handle
+ *
+ * Return: Trace buffer active mask.
+ */
+u64 kbase_csf_firmware_trace_buffer_get_active_mask64(struct firmware_trace_buffer *tb);
+
+/**
+ * kbase_csf_firmware_trace_buffer_set_active_mask64 - Set trace buffer active mask
+ *
+ * @tb: Trace buffer handle
+ * @mask: New active mask
+ *
+ * Return: 0 if successful, negative error code on failure.
+ */
+int kbase_csf_firmware_trace_buffer_set_active_mask64(struct firmware_trace_buffer *tb, u64 mask);
 
 #endif /* _KBASE_CSF_TRACE_BUFFER_H_ */

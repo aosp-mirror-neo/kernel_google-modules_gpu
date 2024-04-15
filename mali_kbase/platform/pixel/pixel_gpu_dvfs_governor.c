@@ -7,11 +7,13 @@
 
 /* Mali core includes */
 #include <mali_kbase.h>
+#include <trace/events/power.h>
 
 /* Pixel integration includes */
 #include "mali_kbase_config_platform.h"
 #include "pixel_gpu_control.h"
 #include "pixel_gpu_dvfs.h"
+#include "pixel_gpu_trace.h"
 
 /**
  * gpu_dvfs_governor_basic() - The evaluation function for &GPU_DVFS_GOVERNOR_BASIC.
@@ -96,15 +98,16 @@ static int gpu_dvfs_governor_quickstep(struct kbase_device *kbdev,
 	int level_max = pc->dvfs.level_max;
 	int level_min = pc->dvfs.level_min;
 	int util = util_stats->util;
+	int step_up = pc->dvfs.step_up_val;
 
 	lockdep_assert_held(&pc->dvfs.lock);
 
 	if ((level > level_max) && (util > tbl[level].util_max)) {
 		/* We need to clock up. */
-		if (level >= 2 && (util > (100 + tbl[level].util_max) / 2)) {
-			dev_dbg(kbdev->dev, "DVFS +2: %d -> %d (u: %d / %d)\n",
-				level, level - 2, util, tbl[level].util_max);
-			level -= 2;
+		if (level >= step_up && (util > (100 + tbl[level].util_max) / 2)) {
+			dev_dbg(kbdev->dev, "DVFS +%d: %d -> %d (u: %d / %d)\n",
+				step_up, level, level - step_up, util, tbl[level].util_max);
+			level -= step_up;
 			pc->dvfs.governor.delay = tbl[level].hysteresis / 2;
 		} else {
 			dev_dbg(kbdev->dev, "DVFS +1: %d -> %d (u: %d / %d)\n",
@@ -164,11 +167,24 @@ int gpu_dvfs_governor_get_next_level(struct kbase_device *kbdev,
 	struct gpu_dvfs_utlization *util_stats)
 {
 	struct pixel_context *pc = kbdev->platform_context;
-	int level;
+	int level, ret;
 
 	lockdep_assert_held(&pc->dvfs.lock);
 	level = governors[pc->dvfs.governor.curr].evaluate(kbdev, util_stats);
-	return clamp(level, pc->dvfs.level_scaling_max, pc->dvfs.level_scaling_min);
+	if (level != pc->dvfs.level) {
+		trace_clock_set_rate("gpu_gov_rec", pc->dvfs.table[level].clk[GPU_DVFS_CLK_SHADERS],
+			raw_smp_processor_id());
+	}
+
+	ret = clamp(level, pc->dvfs.level_scaling_max, pc->dvfs.level_scaling_min);
+	if (ret != level) {
+		trace_gpu_gov_rec_violate(pc->dvfs.table[level].clk[GPU_DVFS_CLK_SHADERS],
+			pc->dvfs.table[ret].clk[GPU_DVFS_CLK_SHADERS],
+			pc->dvfs.table[pc->dvfs.level_scaling_min].clk[GPU_DVFS_CLK_SHADERS],
+			pc->dvfs.table[pc->dvfs.level_scaling_max].clk[GPU_DVFS_CLK_SHADERS]);
+	}
+
+	return ret;
 }
 
 /**

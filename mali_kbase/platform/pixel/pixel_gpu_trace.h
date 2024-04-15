@@ -22,7 +22,6 @@
 
 #define GPU_POWER_STATE_SYMBOLIC_STRINGS \
 	{GPU_POWER_LEVEL_STACKS,	"STACKS"}, \
-	{GPU_POWER_LEVEL_COREGROUP,	"COREGROUP"}, \
 	{GPU_POWER_LEVEL_GLOBAL,	"GLOBAL"}, \
 	{GPU_POWER_LEVEL_OFF,		"OFF"}
 
@@ -43,6 +42,30 @@ TRACE_EVENT(gpu_power_state,
 		__print_symbolic(__entry->from_state, GPU_POWER_STATE_SYMBOLIC_STRINGS),
 		__print_symbolic(__entry->to_state, GPU_POWER_STATE_SYMBOLIC_STRINGS),
 		__entry->change_ns
+	)
+);
+
+TRACE_EVENT(gpu_gov_rec_violate,
+	TP_PROTO(unsigned int recfreq, unsigned int retfreq,
+		unsigned int minlvfreq, unsigned int maxlvfreq),
+	TP_ARGS(recfreq, retfreq, minlvfreq, maxlvfreq),
+	TP_STRUCT__entry(
+		__field(unsigned int, recfreq)
+		__field(unsigned int, retfreq)
+		__field(unsigned int, minlvfreq)
+		__field(unsigned int, maxlvfreq)
+	),
+	TP_fast_assign(
+		__entry->recfreq	= recfreq;
+		__entry->retfreq	= retfreq;
+		__entry->minlvfreq	= minlvfreq;
+		__entry->maxlvfreq	= maxlvfreq;
+	),
+	TP_printk("rec=%u ret=%u min=%u max=%u",
+		__entry->recfreq,
+		__entry->retfreq,
+		__entry->minlvfreq,
+		__entry->maxlvfreq
 	)
 );
 

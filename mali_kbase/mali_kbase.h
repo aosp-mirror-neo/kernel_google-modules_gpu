@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2010-2022 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2010-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -52,6 +52,7 @@
 #include <uapi/gpu/arm/midgard/mali_base_kernel.h>
 
 #include <mali_kbase_linux.h>
+#include <linux/version_compat_defs.h>
 
 /*
  * Include mali_kbase_defs.h first as this provides types needed by other local
@@ -61,9 +62,7 @@
 
 #include "debug/mali_kbase_debug_ktrace.h"
 #include "context/mali_kbase_context.h"
-#include "mali_kbase_strings.h"
 #include "mali_kbase_mem_lowlevel.h"
-#include "mali_kbase_utility.h"
 #include "mali_kbase_mem.h"
 #include "mmu/mali_kbase_mmu.h"
 #include "mali_kbase_gpu_memory_debugfs.h"
@@ -75,7 +74,9 @@
 #include "mali_kbase_jd_debugfs.h"
 #include "mali_kbase_jm.h"
 #include "mali_kbase_js.h"
-#endif /* !MALI_USE_CSF */
+#else /* !MALI_USE_CSF */
+#include "csf/mali_kbase_debug_csf_fault.h"
+#endif /* MALI_USE_CSF */
 
 #include "ipa/mali_kbase_ipa.h"
 
@@ -85,16 +86,12 @@
 
 #include "mali_linux_trace.h"
 
+#define KBASE_DRV_NAME "mali"
+#define KBASE_TIMELINE_NAME KBASE_DRV_NAME ".timeline"
+
 #if MALI_USE_CSF
 #include "csf/mali_kbase_csf.h"
-#endif
 
-#ifndef u64_to_user_ptr
-/* Introduced in Linux v4.6 */
-#define u64_to_user_ptr(x) ((void __user *)(uintptr_t)x)
-#endif
-
-#if MALI_USE_CSF
 /* Physical memory group ID for CSF user I/O.
  */
 #define KBASE_MEM_GROUP_CSF_IO BASE_MEM_GROUP_DEFAULT
@@ -266,7 +263,7 @@ void kbase_jd_cancel(struct kbase_device *kbdev, struct kbase_jd_atom *katom);
 void kbase_jd_zap_context(struct kbase_context *kctx);
 
 /*
- * jd_done_nolock - Perform the necessary handling of an atom that has completed
+ * kbase_jd_done_nolock - Perform the necessary handling of an atom that has completed
  *                  the execution.
  *
  * @katom: Pointer to the atom that completed the execution
@@ -282,7 +279,7 @@ void kbase_jd_zap_context(struct kbase_context *kctx);
  *
  * The caller must hold the kbase_jd_context.lock.
  */
-bool jd_done_nolock(struct kbase_jd_atom *katom, bool post_immediately);
+bool kbase_jd_done_nolock(struct kbase_jd_atom *katom, bool post_immediately);
 
 void kbase_jd_free_external_resources(struct kbase_jd_atom *katom);
 void kbase_jd_dep_clear_locked(struct kbase_jd_atom *katom);
@@ -345,21 +342,8 @@ int kbase_job_slot_softstop_start_rp(struct kbase_context *kctx,
 void kbase_job_slot_softstop(struct kbase_device *kbdev, int js,
 		struct kbase_jd_atom *target_katom);
 
-void kbase_job_slot_softstop_swflags(struct kbase_device *kbdev, int js,
-		struct kbase_jd_atom *target_katom, u32 sw_flags);
-
-/**
- * kbase_job_slot_hardstop - Hard-stop the specified job slot
- * @kctx:         The kbase context that contains the job(s) that should
- *                be hard-stopped
- * @js:           The job slot to hard-stop
- * @target_katom: The job that should be hard-stopped (or NULL for all
- *                jobs from the context)
- * Context:
- *   The job slot lock must be held when calling this function.
- */
-void kbase_job_slot_hardstop(struct kbase_context *kctx, int js,
-		struct kbase_jd_atom *target_katom);
+void kbase_job_slot_softstop_swflags(struct kbase_device *kbdev, unsigned int js,
+				     struct kbase_jd_atom *target_katom, u32 sw_flags);
 
 /**
  * kbase_job_check_enter_disjoint - potentiall enter disjoint mode
@@ -454,19 +438,6 @@ static inline void kbase_free_user_buffer(
 	}
 }
 
-/**
- * kbase_mem_copy_from_extres() - Copy from external resources.
- *
- * @kctx:	kbase context within which the copying is to take place.
- * @buf_data:	Pointer to the information about external resources:
- *		pages pertaining to the external resource, number of
- *		pages to copy.
- *
- * Return:      0 on success, error code otherwise.
- */
-int kbase_mem_copy_from_extres(struct kbase_context *kctx,
-		struct kbase_debug_copy_buffer *buf_data);
-
 #if !MALI_USE_CSF
 int kbase_process_soft_job(struct kbase_jd_atom *katom);
 int kbase_prepare_soft_job(struct kbase_jd_atom *katom);
@@ -474,7 +445,7 @@ void kbase_finish_soft_job(struct kbase_jd_atom *katom);
 void kbase_cancel_soft_job(struct kbase_jd_atom *katom);
 void kbase_resume_suspended_soft_jobs(struct kbase_device *kbdev);
 void kbasep_remove_waiting_soft_job(struct kbase_jd_atom *katom);
-#if defined(CONFIG_SYNC) || defined(CONFIG_SYNC_FILE)
+#if IS_ENABLED(CONFIG_SYNC_FILE)
 void kbase_soft_event_wait_callback(struct kbase_jd_atom *katom);
 #endif
 int kbase_soft_event_update(struct kbase_context *kctx,
@@ -493,9 +464,9 @@ void kbasep_as_do_poke(struct work_struct *work);
  *
  * @kbdev: The kbase device structure for the device
  *
- * The caller should ensure that either kbdev->pm.active_count_lock is held, or
- * a dmb was executed recently (to ensure the value is most
- * up-to-date). However, without a lock the value could change afterwards.
+ * The caller should ensure that either kbase_device::kbase_pm_device_data::lock is held,
+ * or a dmb was executed recently (to ensure the value is most up-to-date).
+ * However, without a lock the value could change afterwards.
  *
  * Return:
  * * false if a suspend is not in progress
@@ -504,6 +475,22 @@ void kbasep_as_do_poke(struct work_struct *work);
 static inline bool kbase_pm_is_suspending(struct kbase_device *kbdev)
 {
 	return kbdev->pm.suspending;
+}
+
+/**
+ * kbase_pm_is_resuming - Check whether System resume of GPU device is in progress.
+ *
+ * @kbdev: The kbase device structure for the device
+ *
+ * The caller should ensure that either kbase_device::kbase_pm_device_data::lock is held,
+ * or a dmb was executed recently (to ensure the value is most up-to-date).
+ * However, without a lock the value could change afterwards.
+ *
+ * Return: true if System resume is in progress, otherwise false.
+ */
+static inline bool kbase_pm_is_resuming(struct kbase_device *kbdev)
+{
+	return kbdev->pm.resuming;
 }
 
 #ifdef CONFIG_MALI_ARBITER_SUPPORT
@@ -559,6 +546,23 @@ static inline bool kbase_pm_is_active(struct kbase_device *kbdev)
 }
 
 /**
+ * kbase_pm_gpu_freq_init() - Find the lowest frequency that the GPU can
+ *                            run as using the device tree, then query the
+ *                            GPU properties to find out the highest GPU
+ *                            frequency and store both of them within the
+ *                            @kbase_device.
+ * @kbdev: Pointer to kbase device.
+ *
+ * This function could be called from kbase_clk_rate_trace_manager_init,
+ * but is left separate as it can be called as soon as
+ * dev_pm_opp_of_add_table() has been called to initialize the OPP table,
+ * which occurs in power_control_init().
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+int kbase_pm_gpu_freq_init(struct kbase_device *kbdev);
+
+/**
  * kbase_pm_metrics_start - Start the utilization metrics timer
  * @kbdev: Pointer to the kbase device for which to start the utilization
  *         metrics calculation thread.
@@ -575,6 +579,40 @@ void kbase_pm_metrics_start(struct kbase_device *kbdev);
  * Stop the timer that drives the metrics calculation, runs the custom DVFS.
  */
 void kbase_pm_metrics_stop(struct kbase_device *kbdev);
+
+/**
+ * kbase_pm_init_event_log - Initialize the event log and make it discoverable
+ *
+ * @kbdev: The kbase device structure for the device (must be a valid pointer)
+ */
+void kbase_pm_init_event_log(struct kbase_device *kbdev);
+
+/**
+ * kbase_pm_max_event_log_size - Get the largest size of the power management event log
+ *
+ * @kbdev: The kbase device structure for the device (must be a valid pointer)
+ *
+ * Return: The size of a buffer large enough to contain the log at any time.
+ */
+u64 kbase_pm_max_event_log_size(struct kbase_device *kbdev);
+
+/**
+ * kbase_pm_copy_event_log - Retrieve a copy of the power management event log
+ *
+ * @kbdev: The kbase device structure for the device (must be a valid pointer)
+ * @buffer: If non-NULL, a buffer of @size bytes to copy the data into
+ * @size: The size of buffer (should be at least as large as returned by
+ *        kbase_pm_event_max_log_size())
+ *
+ * This function is called when dumping a debug log of all recent events in the
+ * power management backend.
+ *
+ * Return: 0 if the log could be copied successfully, otherwise an error code.
+ *
+ * Requires kbdev->pmaccess_lock to be held.
+ */
+int kbase_pm_copy_event_log(struct kbase_device *kbdev,
+		void *buffer, u64 size);
 
 #if MALI_USE_CSF && defined(KBASE_PM_RUNTIME)
 /**
@@ -614,6 +652,7 @@ int kbase_pm_handle_runtime_suspend(struct kbase_device *kbdev);
  * Return: 0 if the wake up was successful.
  */
 int kbase_pm_force_mcu_wakeup_after_sleep(struct kbase_device *kbdev);
+
 #endif
 
 #if !MALI_USE_CSF
@@ -763,23 +802,153 @@ void kbase_device_pcm_dev_term(struct kbase_device *const kbdev);
 #define KBASE_DISJOINT_STATE_INTERLEAVED_CONTEXT_COUNT_THRESHOLD 2
 
 /**
- * kbase_create_realtime_thread - Create a realtime thread with an appropriate coremask
+ * kbase_kthread_run_rt - Create a realtime thread with an appropriate coremask
  *
- * @kbdev:    the kbase device
- * @threadfn: the function the realtime thread will execute
- * @data:     pointer to the thread's data
- * @namefmt:  a name for the thread.
+ * @kbdev:        the kbase device
+ * @threadfn:     the function the realtime thread will execute
+ * @thread_param: data pointer to @threadfn
+ * @namefmt:      a name for the thread.
  *
  * Creates a realtime kthread with priority &KBASE_RT_THREAD_PRIO and restricted
  * to cores defined by &KBASE_RT_THREAD_CPUMASK_MIN and &KBASE_RT_THREAD_CPUMASK_MAX.
  *
- * Return: A valid &struct task_struct pointer on success, or an ERR_PTR on failure.
+ * Wakes up the task.
+ *
+ * Return: IS_ERR() on failure, or a valid task pointer.
  */
-struct task_struct * kbase_create_realtime_thread(struct kbase_device *kbdev,
-	int (*threadfn)(void *data), void *data, const char namefmt[]);
+struct task_struct *kbase_kthread_run_rt(struct kbase_device *kbdev,
+	int (*threadfn)(void *data), void *thread_param, const char namefmt[], ...);
+
+/**
+ * kbase_kthread_run_worker_rt - Create a realtime kthread_worker_fn with an appropriate coremask
+ *
+ * @kbdev:   the kbase device
+ * @worker:  pointer to the thread's parameters
+ * @namefmt: a name for the thread.
+ *
+ * Creates a realtime kthread_worker_fn thread with priority &KBASE_RT_THREAD_PRIO and restricted
+ * to cores defined by &KBASE_RT_THREAD_CPUMASK_MIN and &KBASE_RT_THREAD_CPUMASK_MAX.
+ *
+ * Wakes up the task.
+ *
+ * Return: Zero on success, or an PTR_ERR on failure.
+ */
+int kbase_kthread_run_worker_rt(struct kbase_device *kbdev,
+	struct kthread_worker *worker, const char namefmt[], ...);
+
+/**
+ * kbase_destroy_kworker_stack - Destroy a kthread_worker and it's thread on the stack
+ *
+ * @worker:   pointer to the thread's kworker
+ */
+void kbase_destroy_kworker_stack(struct kthread_worker *worker);
 
 #if !defined(UINT64_MAX)
 	#define UINT64_MAX ((uint64_t)0xFFFFFFFFFFFFFFFFULL)
 #endif
+
+/**
+ * kbase_file_fops_count() - Get the kfile::fops_count value
+ *
+ * @kfile: Pointer to the object representing the mali device file.
+ *
+ * The value is read with kfile::lock held.
+ *
+ * Return: sampled value of kfile::fops_count.
+ */
+static inline u32 kbase_file_fops_count(struct kbase_file *kfile)
+{
+	u32 fops_count;
+
+	spin_lock(&kfile->lock);
+	fops_count = kfile->fops_count;
+	spin_unlock(&kfile->lock);
+
+	return fops_count;
+}
+
+/**
+ * kbase_file_inc_fops_count_unless_closed() - Increment the kfile::fops_count value if the
+ *                                             kfile::owner is still set.
+ *
+ * @kfile: Pointer to the object representing the /dev/malixx device file instance.
+ *
+ * Return: true if the increment was done otherwise false.
+ */
+static inline bool kbase_file_inc_fops_count_unless_closed(struct kbase_file *kfile)
+{
+	bool count_incremented = false;
+
+	spin_lock(&kfile->lock);
+	if (kfile->owner) {
+		kfile->fops_count++;
+		count_incremented = true;
+	}
+	spin_unlock(&kfile->lock);
+
+	return count_incremented;
+}
+
+/**
+ * kbase_file_dec_fops_count() - Decrement the kfile::fops_count value
+ *
+ * @kfile: Pointer to the object representing the /dev/malixx device file instance.
+ *
+ * This function shall only be called to decrement kfile::fops_count if a successful call
+ * to kbase_file_inc_fops_count_unless_closed() was made previously by the current thread.
+ *
+ * The function would enqueue the kfile::destroy_kctx_work if the process that originally
+ * created the file instance has closed its copy and no Kbase handled file operations are
+ * in progress and no memory mappings are present for the file instance.
+ */
+static inline void kbase_file_dec_fops_count(struct kbase_file *kfile)
+{
+	spin_lock(&kfile->lock);
+	WARN_ON_ONCE(kfile->fops_count <= 0);
+	kfile->fops_count--;
+	if (unlikely(!kfile->fops_count && !kfile->owner && !kfile->map_count)) {
+		queue_work(system_wq, &kfile->destroy_kctx_work);
+#if IS_ENABLED(CONFIG_DEBUG_FS)
+		wake_up(&kfile->zero_fops_count_wait);
+#endif
+	}
+	spin_unlock(&kfile->lock);
+}
+
+/**
+ * kbase_file_inc_cpu_mapping_count() - Increment the kfile::map_count value.
+ *
+ * @kfile: Pointer to the object representing the /dev/malixx device file instance.
+ *
+ * This function shall be called when the memory mapping on /dev/malixx device file
+ * instance is created. The kbase_file::setup_state shall be KBASE_FILE_COMPLETE.
+ */
+static inline void kbase_file_inc_cpu_mapping_count(struct kbase_file *kfile)
+{
+	spin_lock(&kfile->lock);
+	kfile->map_count++;
+	spin_unlock(&kfile->lock);
+}
+
+/**
+ * kbase_file_dec_cpu_mapping_count() - Decrement the kfile::map_count value
+ *
+ * @kfile: Pointer to the object representing the /dev/malixx device file instance.
+ *
+ * This function is called to decrement kfile::map_count value when the memory mapping
+ * on /dev/malixx device file is closed.
+ * The function would enqueue the kfile::destroy_kctx_work if the process that originally
+ * created the file instance has closed its copy and there are no mappings present and no
+ * Kbase handled file operations are in progress for the file instance.
+ */
+static inline void kbase_file_dec_cpu_mapping_count(struct kbase_file *kfile)
+{
+	spin_lock(&kfile->lock);
+	WARN_ON_ONCE(kfile->map_count <= 0);
+	kfile->map_count--;
+	if (unlikely(!kfile->map_count && !kfile->owner && !kfile->fops_count))
+		queue_work(system_wq, &kfile->destroy_kctx_work);
+	spin_unlock(&kfile->lock);
+}
 
 #endif

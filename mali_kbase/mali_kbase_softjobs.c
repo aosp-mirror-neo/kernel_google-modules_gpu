@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2011-2021 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2011-2023 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -23,7 +23,7 @@
 
 #include <linux/dma-buf.h>
 #include <asm/cacheflush.h>
-#if defined(CONFIG_SYNC) || defined(CONFIG_SYNC_FILE)
+#if IS_ENABLED(CONFIG_SYNC_FILE)
 #include <mali_kbase_sync.h>
 #include <mali_kbase_fence.h>
 #endif
@@ -41,6 +41,7 @@
 #include <linux/kernel.h>
 #include <linux/cache.h>
 #include <linux/file.h>
+#include <linux/version_compat_defs.h>
 
 #if !MALI_USE_CSF
 /**
@@ -75,7 +76,7 @@ static void kbasep_add_waiting_with_timeout(struct kbase_jd_atom *katom)
 	/* Record the start time of this atom so we could cancel it at
 	 * the right time.
 	 */
-	katom->start_timestamp = ktime_get();
+	katom->start_timestamp = ktime_get_raw();
 
 	/* Add the atom to the waiting list before the timer is
 	 * (re)started to make sure that it gets processed.
@@ -206,7 +207,7 @@ static int kbase_dump_cpu_gpu_time(struct kbase_jd_atom *katom)
 	return 0;
 }
 
-#if defined(CONFIG_SYNC) || defined(CONFIG_SYNC_FILE)
+#if IS_ENABLED(CONFIG_SYNC_FILE)
 /* Called by the explicit fence mechanism when a fence wait has completed */
 void kbase_soft_event_wait_callback(struct kbase_jd_atom *katom)
 {
@@ -215,7 +216,7 @@ void kbase_soft_event_wait_callback(struct kbase_jd_atom *katom)
 	rt_mutex_lock(&kctx->jctx.lock);
 	kbasep_remove_waiting_soft_job(katom);
 	kbase_finish_soft_job(katom);
-	if (jd_done_nolock(katom, true))
+	if (kbase_jd_done_nolock(katom, true))
 		kbase_js_sched_all(kctx->kbdev);
 	rt_mutex_unlock(&kctx->jctx.lock);
 }
@@ -229,7 +230,7 @@ static void kbasep_soft_event_complete_job(struct kthread_work *work)
 	int resched;
 
 	rt_mutex_lock(&kctx->jctx.lock);
-	resched = jd_done_nolock(katom, true);
+	resched = kbase_jd_done_nolock(katom, true);
 	rt_mutex_unlock(&kctx->jctx.lock);
 
 	if (resched)
@@ -390,7 +391,7 @@ void kbasep_soft_job_timeout_worker(struct timer_list *timer)
 			soft_job_timeout);
 	u32 timeout_ms = (u32)atomic_read(
 			&kctx->kbdev->js_data.soft_job_timeout_ms);
-	ktime_t cur_time = ktime_get();
+	ktime_t cur_time = ktime_get_raw();
 	bool restarting = false;
 	unsigned long lflags;
 	struct list_head *entry, *tmp;
@@ -500,10 +501,11 @@ out:
 static void kbasep_soft_event_cancel_job(struct kbase_jd_atom *katom)
 {
 	katom->event_code = BASE_JD_EVENT_JOB_CANCELLED;
-	if (jd_done_nolock(katom, true))
+	if (kbase_jd_done_nolock(katom, true))
 		kbase_js_sched_all(katom->kctx->kbdev);
 }
 
+#if IS_ENABLED(CONFIG_MALI_VECTOR_DUMP) || MALI_UNIT_TEST
 static void kbase_debug_copy_finish(struct kbase_jd_atom *katom)
 {
 	struct kbase_debug_copy_buffer *buffers = katom->softjob_data;
@@ -675,8 +677,8 @@ static int kbase_debug_copy_prepare(struct kbase_jd_atom *katom)
 		case KBASE_MEM_TYPE_IMPORTED_USER_BUF:
 		{
 			struct kbase_mem_phy_alloc *alloc = reg->gpu_alloc;
-			unsigned long nr_pages =
-				alloc->imported.user_buf.nr_pages;
+			const unsigned long nr_pages = alloc->imported.user_buf.nr_pages;
+			const unsigned long start = alloc->imported.user_buf.address;
 
 			if (alloc->imported.user_buf.mm != current->mm) {
 				ret = -EINVAL;
@@ -688,11 +690,9 @@ static int kbase_debug_copy_prepare(struct kbase_jd_atom *katom)
 				ret = -ENOMEM;
 				goto out_unlock;
 			}
-
-			ret = get_user_pages_fast(
-					alloc->imported.user_buf.address,
-					nr_pages, 0,
-					buffers[i].extres_pages);
+			kbase_gpu_vm_unlock(katom->kctx);
+			ret = get_user_pages_fast(start, nr_pages, 0, buffers[i].extres_pages);
+			kbase_gpu_vm_lock(katom->kctx);
 			if (ret != nr_pages) {
 				/* Adjust number of pages, so that we only
 				 * attempt to release pages in the array that we
@@ -730,7 +730,6 @@ out_cleanup:
 
 	return ret;
 }
-#endif /* !MALI_USE_CSF */
 
 #if KERNEL_VERSION(5, 6, 0) <= LINUX_VERSION_CODE
 static void *dma_buf_kmap_page(struct kbase_mem_phy_alloc *gpu_alloc,
@@ -753,7 +752,7 @@ static void *dma_buf_kmap_page(struct kbase_mem_phy_alloc *gpu_alloc,
 		if (page_index == page_num) {
 			*page = sg_page_iter_page(&sg_iter);
 
-			return kmap(*page);
+			return kbase_kmap(*page);
 		}
 		page_index++;
 	}
@@ -762,8 +761,18 @@ static void *dma_buf_kmap_page(struct kbase_mem_phy_alloc *gpu_alloc,
 }
 #endif
 
-int kbase_mem_copy_from_extres(struct kbase_context *kctx,
-		struct kbase_debug_copy_buffer *buf_data)
+/**
+ * kbase_mem_copy_from_extres() - Copy from external resources.
+ *
+ * @kctx:	kbase context within which the copying is to take place.
+ * @buf_data:	Pointer to the information about external resources:
+ *		pages pertaining to the external resource, number of
+ *		pages to copy.
+ *
+ * Return:      0 on success, error code otherwise.
+ */
+static int kbase_mem_copy_from_extres(struct kbase_context *kctx,
+				      struct kbase_debug_copy_buffer *buf_data)
 {
 	unsigned int i;
 	unsigned int target_page_nr = 0;
@@ -789,14 +798,13 @@ int kbase_mem_copy_from_extres(struct kbase_context *kctx,
 		for (i = 0; i < buf_data->nr_extres_pages &&
 				target_page_nr < buf_data->nr_pages; i++) {
 			struct page *pg = buf_data->extres_pages[i];
-			void *extres_page = kmap(pg);
-
+			void *extres_page = kbase_kmap(pg);
 			if (extres_page) {
 				ret = kbase_mem_copy_to_pinned_user_pages(
 						pages, extres_page, &to_copy,
 						buf_data->nr_pages,
 						&target_page_nr, offset);
-				kunmap(pg);
+				kbase_kunmap(pg, extres_page);
 				if (ret)
 					goto out_unlock;
 			}
@@ -812,11 +820,7 @@ int kbase_mem_copy_from_extres(struct kbase_context *kctx,
 
 		dma_to_copy = min(dma_buf->size,
 			(size_t)(buf_data->nr_extres_pages * PAGE_SIZE));
-		ret = dma_buf_begin_cpu_access(dma_buf,
-#if KERNEL_VERSION(4, 6, 0) > LINUX_VERSION_CODE && !defined(CONFIG_CHROMEOS)
-					       0, dma_to_copy,
-#endif
-					       DMA_FROM_DEVICE);
+		ret = dma_buf_begin_cpu_access(dma_buf, DMA_FROM_DEVICE);
 		if (ret)
 			goto out_unlock;
 
@@ -835,7 +839,7 @@ int kbase_mem_copy_from_extres(struct kbase_context *kctx,
 						&target_page_nr, offset);
 
 #if KERNEL_VERSION(5, 6, 0) <= LINUX_VERSION_CODE
-				kunmap(pg);
+				kbase_kunmap(pg, extres_page);
 #else
 				dma_buf_kunmap(dma_buf, i, extres_page);
 #endif
@@ -843,11 +847,7 @@ int kbase_mem_copy_from_extres(struct kbase_context *kctx,
 					break;
 			}
 		}
-		dma_buf_end_cpu_access(dma_buf,
-#if KERNEL_VERSION(4, 6, 0) > LINUX_VERSION_CODE && !defined(CONFIG_CHROMEOS)
-				       0, dma_to_copy,
-#endif
-				       DMA_FROM_DEVICE);
+		dma_buf_end_cpu_access(dma_buf, DMA_FROM_DEVICE);
 		break;
 	}
 	default:
@@ -858,7 +858,6 @@ out_unlock:
 	return ret;
 }
 
-#if !MALI_USE_CSF
 static int kbase_debug_copy(struct kbase_jd_atom *katom)
 {
 	struct kbase_debug_copy_buffer *buffers = katom->softjob_data;
@@ -876,6 +875,7 @@ static int kbase_debug_copy(struct kbase_jd_atom *katom)
 
 	return 0;
 }
+#endif /* IS_ENABLED(CONFIG_MALI_VECTOR_DUMP) || MALI_UNIT_TEST */
 #endif /* !MALI_USE_CSF */
 
 #define KBASEP_JIT_ALLOC_GPU_ADDR_ALIGNMENT ((u32)0x7)
@@ -935,26 +935,6 @@ int kbasep_jit_alloc_validate(struct kbase_context *kctx,
 
 #if !MALI_USE_CSF
 
-/*
- * Sizes of user data to copy for each just-in-time memory interface version
- *
- * In interface version 2 onwards this is the same as the struct size, allowing
- * copying of arrays of structures from userspace.
- *
- * In interface version 1 the structure size was variable, and hence arrays of
- * structures cannot be supported easily, and were not a feature present in
- * version 1 anyway.
- */
-static const size_t jit_info_copy_size_for_jit_version[] = {
-	/* in jit_version 1, the structure did not have any end padding, hence
-	 * it could be a different size on 32 and 64-bit clients. We therefore
-	 * do not copy past the last member
-	 */
-	[1] = offsetofend(struct base_jit_alloc_info_10_2, id),
-	[2] = sizeof(struct base_jit_alloc_info_11_5),
-	[3] = sizeof(struct base_jit_alloc_info)
-};
-
 static int kbase_jit_allocate_prepare(struct kbase_jd_atom *katom)
 {
 	__user u8 *data = (__user u8 *)(uintptr_t) katom->jc;
@@ -964,18 +944,18 @@ static int kbase_jit_allocate_prepare(struct kbase_jd_atom *katom)
 	u32 count;
 	int ret;
 	u32 i;
-	size_t jit_info_user_copy_size;
 
-	WARN_ON(kctx->jit_version >=
-		ARRAY_SIZE(jit_info_copy_size_for_jit_version));
-	jit_info_user_copy_size =
-			jit_info_copy_size_for_jit_version[kctx->jit_version];
-	WARN_ON(jit_info_user_copy_size > sizeof(*info));
+	if (!kbase_mem_allow_alloc(kctx)) {
+		dev_dbg(kbdev->dev, "Invalid attempt to allocate JIT memory by %s/%d for ctx %d_%d",
+			current->comm, current->pid, kctx->tgid, kctx->id);
+		ret = -EINVAL;
+		goto fail;
+	}
 
 	/* For backwards compatibility, and to prevent reading more than 1 jit
 	 * info struct on jit version 1
 	 */
-	if (katom->nr_extres == 0 || kctx->jit_version == 1)
+	if (katom->nr_extres == 0)
 		katom->nr_extres = 1;
 	count = katom->nr_extres;
 
@@ -995,17 +975,11 @@ static int kbase_jit_allocate_prepare(struct kbase_jd_atom *katom)
 
 	katom->softjob_data = info;
 
-	for (i = 0; i < count; i++, info++, data += jit_info_user_copy_size) {
-		if (copy_from_user(info, data, jit_info_user_copy_size) != 0) {
+	for (i = 0; i < count; i++, info++, data += sizeof(*info)) {
+		if (copy_from_user(info, data, sizeof(*info)) != 0) {
 			ret = -EINVAL;
 			goto free_info;
 		}
-		/* Clear any remaining bytes when user struct is smaller than
-		 * kernel struct. For jit version 1, this also clears the
-		 * padding bytes
-		 */
-		memset(((u8 *)info) + jit_info_user_copy_size, 0,
-				sizeof(*info) - jit_info_user_copy_size);
 
 		ret = kbasep_jit_alloc_validate(kctx, info);
 		if (ret)
@@ -1357,7 +1331,7 @@ static void kbasep_jit_finish_worker(struct kthread_work *work)
 
 	rt_mutex_lock(&kctx->jctx.lock);
 	kbase_finish_soft_job(katom);
-	resched = jd_done_nolock(katom, true);
+	resched = kbase_jd_done_nolock(katom, true);
 	rt_mutex_unlock(&kctx->jctx.lock);
 
 	if (resched)
@@ -1486,10 +1460,11 @@ static void kbase_ext_res_process(struct kbase_jd_atom *katom, bool map)
 			if (!kbase_sticky_resource_acquire(katom->kctx,
 					gpu_addr))
 				goto failed_loop;
-		} else
+		} else {
 			if (!kbase_sticky_resource_release_force(katom->kctx, NULL,
 					gpu_addr))
 				failed = true;
+		}
 	}
 
 	/*
@@ -1549,7 +1524,7 @@ int kbase_process_soft_job(struct kbase_jd_atom *katom)
 		ret = kbase_dump_cpu_gpu_time(katom);
 		break;
 
-#if defined(CONFIG_SYNC) || defined(CONFIG_SYNC_FILE)
+#if IS_ENABLED(CONFIG_SYNC_FILE)
 	case BASE_JD_REQ_SOFT_FENCE_TRIGGER:
 		katom->event_code = kbase_sync_fence_out_trigger(katom,
 				katom->event_code == BASE_JD_EVENT_DONE ?
@@ -1578,6 +1553,7 @@ int kbase_process_soft_job(struct kbase_jd_atom *katom)
 	case BASE_JD_REQ_SOFT_EVENT_RESET:
 		kbasep_soft_event_update_locked(katom, BASE_JD_SOFT_EVENT_RESET);
 		break;
+#if IS_ENABLED(CONFIG_MALI_VECTOR_DUMP) || MALI_UNIT_TEST
 	case BASE_JD_REQ_SOFT_DEBUG_COPY:
 	{
 		int res = kbase_debug_copy(katom);
@@ -1586,6 +1562,7 @@ int kbase_process_soft_job(struct kbase_jd_atom *katom)
 			katom->event_code = BASE_JD_EVENT_JOB_INVALID;
 		break;
 	}
+#endif /* IS_ENABLED(CONFIG_MALI_VECTOR_DUMP) || MALI_UNIT_TEST */
 	case BASE_JD_REQ_SOFT_JIT_ALLOC:
 		ret = kbase_jit_allocate_process(katom);
 		break;
@@ -1609,7 +1586,7 @@ int kbase_process_soft_job(struct kbase_jd_atom *katom)
 void kbase_cancel_soft_job(struct kbase_jd_atom *katom)
 {
 	switch (katom->core_req & BASE_JD_REQ_SOFT_JOB_TYPE) {
-#if defined(CONFIG_SYNC) || defined(CONFIG_SYNC_FILE)
+#if IS_ENABLED(CONFIG_SYNC_FILE)
 	case BASE_JD_REQ_SOFT_FENCE_WAIT:
 		kbase_sync_fence_in_cancel_wait(katom);
 		break;
@@ -1632,7 +1609,7 @@ int kbase_prepare_soft_job(struct kbase_jd_atom *katom)
 				return -EINVAL;
 		}
 		break;
-#if defined(CONFIG_SYNC) || defined(CONFIG_SYNC_FILE)
+#if IS_ENABLED(CONFIG_SYNC_FILE)
 	case BASE_JD_REQ_SOFT_FENCE_TRIGGER:
 		{
 			struct base_fence fence;
@@ -1683,20 +1660,9 @@ int kbase_prepare_soft_job(struct kbase_jd_atom *katom)
 							  fence.basep.fd);
 			if (ret < 0)
 				return ret;
-
-#ifdef CONFIG_MALI_DMA_FENCE
-			/*
-			 * Set KCTX_NO_IMPLICIT_FENCE in the context the first
-			 * time a soft fence wait job is observed. This will
-			 * prevent the implicit dma-buf fence to conflict with
-			 * the Android native sync fences.
-			 */
-			if (!kbase_ctx_flag(katom->kctx, KCTX_NO_IMPLICIT_SYNC))
-				kbase_ctx_flag_set(katom->kctx, KCTX_NO_IMPLICIT_SYNC);
-#endif /* CONFIG_MALI_DMA_FENCE */
 		}
 		break;
-#endif /* CONFIG_SYNC || CONFIG_SYNC_FILE */
+#endif /* CONFIG_SYNC_FILE */
 	case BASE_JD_REQ_SOFT_JIT_ALLOC:
 		return kbase_jit_allocate_prepare(katom);
 	case BASE_JD_REQ_SOFT_JIT_FREE:
@@ -1707,8 +1673,10 @@ int kbase_prepare_soft_job(struct kbase_jd_atom *katom)
 		if (katom->jc == 0)
 			return -EINVAL;
 		break;
+#if IS_ENABLED(CONFIG_MALI_VECTOR_DUMP) || MALI_UNIT_TEST
 	case BASE_JD_REQ_SOFT_DEBUG_COPY:
 		return kbase_debug_copy_prepare(katom);
+#endif /* IS_ENABLED(CONFIG_MALI_VECTOR_DUMP) || MALI_UNIT_TEST */
 	case BASE_JD_REQ_SOFT_EXT_RES_MAP:
 		return kbase_ext_res_prepare(katom);
 	case BASE_JD_REQ_SOFT_EXT_RES_UNMAP:
@@ -1729,7 +1697,7 @@ void kbase_finish_soft_job(struct kbase_jd_atom *katom)
 	case BASE_JD_REQ_SOFT_DUMP_CPU_GPU_TIME:
 		/* Nothing to do */
 		break;
-#if defined(CONFIG_SYNC) || defined(CONFIG_SYNC_FILE)
+#if IS_ENABLED(CONFIG_SYNC_FILE)
 	case BASE_JD_REQ_SOFT_FENCE_TRIGGER:
 		/* If fence has not yet been signaled, do it now */
 		kbase_sync_fence_out_trigger(katom, katom->event_code ==
@@ -1739,10 +1707,12 @@ void kbase_finish_soft_job(struct kbase_jd_atom *katom)
 		/* Release katom's reference to fence object */
 		kbase_sync_fence_in_remove(katom);
 		break;
-#endif /* CONFIG_SYNC || CONFIG_SYNC_FILE */
+#endif /* CONFIG_SYNC_FILE */
+#if IS_ENABLED(CONFIG_MALI_VECTOR_DUMP) || MALI_UNIT_TEST
 	case BASE_JD_REQ_SOFT_DEBUG_COPY:
 		kbase_debug_copy_finish(katom);
 		break;
+#endif /* IS_ENABLED(CONFIG_MALI_VECTOR_DUMP) || MALI_UNIT_TEST */
 	case BASE_JD_REQ_SOFT_JIT_ALLOC:
 		kbase_jit_allocate_finish(katom);
 		break;
@@ -1793,7 +1763,7 @@ void kbase_resume_suspended_soft_jobs(struct kbase_device *kbdev)
 
 		if (kbase_process_soft_job(katom_iter) == 0) {
 			kbase_finish_soft_job(katom_iter);
-			resched |= jd_done_nolock(katom_iter, true);
+			resched |= kbase_jd_done_nolock(katom_iter, true);
 #ifdef CONFIG_MALI_ARBITER_SUPPORT
 			atomic_dec(&kbdev->pm.gpu_users_waiting);
 #endif /* CONFIG_MALI_ARBITER_SUPPORT */
