@@ -411,7 +411,7 @@ static struct mali_pma_slab *mali_pma_slab_add(
 
 	/* Map the DMA buffer into the attached device address space. */
 	dma_sg_table =
-		dma_buf_map_attachment(dma_attachment, DMA_BIDIRECTIONAL);
+		dma_buf_map_attachment_unlocked(dma_attachment, DMA_BIDIRECTIONAL);
 	if (IS_ERR(dma_sg_table)) {
 		dev_err(mali_pma_dev->dev, "Failed to map the DMA buffer\n");
 		goto out;
@@ -450,7 +450,7 @@ static void mali_pma_slab_remove(
 
 	/* Free the Mali protected memory slab allocation. */
 	if (slab->dma_sg_table) {
-		dma_buf_unmap_attachment(
+		dma_buf_unmap_attachment_unlocked(
 			slab->dma_attachment,
 	 		slab->dma_sg_table, DMA_BIDIRECTIONAL);
 	}

@@ -3137,7 +3137,7 @@ void kbase_mem_kref_free(struct kref *kref)
 			WARN_ONCE(alloc->imported.umm.current_mapping_usage_count != 1,
 					"WARNING: expected excatly 1 mapping, got %d",
 					alloc->imported.umm.current_mapping_usage_count);
-			dma_buf_unmap_attachment(
+			dma_buf_unmap_attachment_unlocked(
 					alloc->imported.umm.dma_attachment,
 					alloc->imported.umm.sgt,
 					DMA_BIDIRECTIONAL);
