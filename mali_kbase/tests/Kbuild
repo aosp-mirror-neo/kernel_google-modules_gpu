@@ -17,7 +17,6 @@
 # http://www.gnu.org/licenses/gpl-2.0.html.
 #
 #
-src:=$(if $(patsubst /%,,$(src)),$(srctree)/$(src),$(src))
 
 ccflags-y += -I$(src)/include \
              -I$(src)
