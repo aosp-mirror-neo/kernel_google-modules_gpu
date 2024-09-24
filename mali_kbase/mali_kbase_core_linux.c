@@ -790,6 +790,9 @@ static int kbase_open(struct inode *inode, struct file *filp)
 	struct kbase_file *kfile;
 	int ret = 0;
 
+	if (WARN_ON_ONCE(!(filp->f_op->fop_flags & FOP_UNSIGNED_OFFSET)))
+		return -EINVAL;
+
 	kbdev = kbase_find_device((int)iminor(inode));
 
 	if (!kbdev)
@@ -814,7 +817,6 @@ static int kbase_open(struct inode *inode, struct file *filp)
 	}
 
 	filp->private_data = kfile;
-	filp->f_mode |= FMODE_UNSIGNED_OFFSET;
 
 	return 0;
 
@@ -2306,6 +2308,7 @@ static unsigned long kbase_get_unmapped_area(struct file *const filp, const unsi
 
 static const struct file_operations kbase_fops = {
 	.owner = THIS_MODULE,
+	.fop_flags = FOP_UNSIGNED_OFFSET,
 	.open = kbase_open,
 	.release = kbase_release,
 	.read = kbase_read,
