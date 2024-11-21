@@ -133,7 +133,7 @@ struct kbasep_debug_assert_cb {
 #ifdef CONFIG_MALI_DEBUG
 #define KBASE_DEBUG_CODE(X) X
 #else
-#define KBASE_DEBUG_CODE(X) CSTD_NOP()
+#define KBASE_DEBUG_CODE(X) CSTD_NOP(X)
 #endif /* CONFIG_MALI_DEBUG */
 
 /** @} */

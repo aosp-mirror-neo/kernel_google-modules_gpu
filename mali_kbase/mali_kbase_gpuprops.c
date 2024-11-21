@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2011-2023 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2011-2024 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -203,8 +203,12 @@ static int kbase_gpuprops_get_props(struct kbase_device *kbdev)
 	struct kbasep_gpuprops_regdump *regdump;
 
 	int i, err;
+	u64 gpu_features_mask = 0;
 
 	if (WARN_ON(kbdev == NULL) || WARN_ON(kbdev->gpu_props.priv_data == NULL))
+		return -EINVAL;
+
+	if (WARN_ON(kbdev->dev == NULL) || WARN_ON(kbdev->dev->of_node == NULL))
 		return -EINVAL;
 
 	gpu_props = &kbdev->gpu_props;
@@ -242,8 +246,13 @@ static int kbase_gpuprops_get_props(struct kbase_device *kbdev)
 	gpu_props->impl_tech = KBASE_UBFX32(regdump->thread_features, 30U, 2);
 #endif /* MALI_USE_CSF */
 
+	err = of_property_read_u64(kbdev->dev->of_node, "gpu_features_mask", &gpu_features_mask);
+	// In case of error, just accept all the features reported by the HW.
+	if (err)
+		gpu_features_mask = 0;
+
 	/* Features */
-	kbase_gpuprops_parse_gpu_features(&gpu_props->gpu_features, regdump->gpu_features);
+	kbase_gpuprops_parse_gpu_features(&gpu_props->gpu_features, regdump->gpu_features & ~gpu_features_mask);
 
 	gpu_props->coherency_info.coherent_core_group = KBASE_UBFX64(regdump->mem_features, 0U, 1);
 	gpu_props->coherency_info.coherent_super_group = KBASE_UBFX64(regdump->mem_features, 1U, 1);
@@ -437,7 +446,7 @@ int kbase_gpuprops_update_l2_features(struct kbase_device *kbdev)
 {
 	int err = 0;
 
-	if (kbase_hw_has_feature(kbdev, BASE_HW_FEATURE_L2_CONFIG)) {
+	if (kbase_hw_has_feature(kbdev, KBASE_HW_FEATURE_L2_CONFIG)) {
 		struct kbasep_gpuprops_regdump *regdump = &PRIV_DATA_REGDUMP(kbdev);
 
 		/* Check for L2 cache size & hash overrides */
@@ -673,6 +682,7 @@ static void kbase_populate_user_data(struct kbase_device *kbdev, struct gpu_prop
 	else
 		data->thread_props.max_workgroup_size = regdump->thread_max_workgroup_size;
 
+
 	if (regdump->thread_max_barrier_size == 0)
 		data->thread_props.max_barrier_size = THREAD_MBS_DEFAULT;
 	else
@@ -699,7 +709,7 @@ static void kbase_populate_user_data(struct kbase_device *kbdev, struct gpu_prop
 		data->thread_props.max_thread_group_split = THREAD_MTGS_DEFAULT;
 	}
 
-	if (!kbase_hw_has_feature(kbdev, BASE_HW_FEATURE_THREAD_GROUP_SPLIT))
+	if (!kbase_hw_has_feature(kbdev, KBASE_HW_FEATURE_THREAD_GROUP_SPLIT))
 		data->thread_props.max_thread_group_split = 0;
 
 	/* Raw Register Values */
@@ -837,9 +847,15 @@ void kbase_gpuprops_free_user_buffer(struct kbase_device *kbdev)
 
 int kbase_device_populate_max_freq(struct kbase_device *kbdev)
 {
-	/* obtain max configured gpu frequency, if devfreq is enabled then
-	 * this will be overridden by the highest operating point found
-	 */
-	kbdev->gpu_props.gpu_freq_khz_max = DEFAULT_GPU_FREQ_KHZ_MAX;
+	/* Check if maximum frequency hasn't already been initialized during DVFS init */
+	if (kbdev->gpu_props.gpu_freq_khz_max == 0) {
+		/* obtain max configured gpu frequency, if devfreq is enabled then
+		 * this will be overridden by the highest operating point found
+		 */
+		kbdev->gpu_props.gpu_freq_khz_max = DEFAULT_GPU_FREQ_KHZ_MAX;
+		dev_info(kbdev->dev, "GPU max frequency initialized to %u KHz",
+			kbdev->gpu_props.gpu_freq_khz_max);
+	}
+
 	return 0;
 }

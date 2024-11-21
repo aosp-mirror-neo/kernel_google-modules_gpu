@@ -68,7 +68,13 @@ bool kbase_alloc_page_metadata(struct kbase_device *kbdev, struct page *p, dma_a
 	if (!IS_ENABLED(CONFIG_PAGE_MIGRATION_SUPPORT))
 		return false;
 
-	page_md = kzalloc(sizeof(struct kbase_page_metadata), GFP_KERNEL);
+	/* Composite large-page is excluded from migration, trigger a warn if a development
+	 * wrongly leads to it.
+	 */
+	if (is_huge_head(as_tagged(page_to_phys(p))) || is_partial(as_tagged(page_to_phys(p))))
+		dev_WARN(kbdev->dev, "%s: migration-metadata attempted on large-page.", __func__);
+
+	page_md = kmem_cache_zalloc(kbdev->page_metadata_slab, GFP_KERNEL);
 	if (!page_md)
 		return false;
 
@@ -129,7 +135,7 @@ static void kbase_free_page_metadata(struct kbase_device *kbdev, struct page *p,
 	dma_addr = kbase_dma_addr(p);
 	dma_unmap_page(dev, dma_addr, PAGE_SIZE, DMA_BIDIRECTIONAL);
 
-	kfree(page_md);
+	kmem_cache_free(kbdev->page_metadata_slab, page_md);
 	set_page_private(p, 0);
 	ClearPagePrivate(p);
 }
@@ -221,9 +227,9 @@ static int kbasep_migrate_page_pt_mapped(struct page *old_page, struct page *new
 	 */
 	kbase_gpu_vm_lock_with_pmode_sync(kctx);
 
-	ret = kbase_mmu_migrate_page(
-		as_tagged(page_to_phys(old_page)), as_tagged(page_to_phys(new_page)), old_dma_addr,
-		new_dma_addr, PGD_VPFN_LEVEL_GET_LEVEL(page_md->data.pt_mapped.pgd_vpfn_level));
+	ret = kbase_mmu_migrate_pgd_page(as_tagged(page_to_phys(old_page)),
+					 as_tagged(page_to_phys(new_page)), old_dma_addr,
+					 new_dma_addr);
 
 	if (ret == 0) {
 		dma_unmap_page(kbdev->dev, old_dma_addr, PAGE_SIZE, DMA_BIDIRECTIONAL);
@@ -288,14 +294,14 @@ static int kbasep_migrate_page_allocated_mapped(struct page *old_page, struct pa
 	kbase_gpu_vm_lock_with_pmode_sync(kctx);
 
 	/* Unmap the old physical range. */
-	unmap_mapping_range(kctx->kfile->filp->f_inode->i_mapping,
+	unmap_mapping_range(kctx->filp->f_inode->i_mapping,
 			    (loff_t)(page_md->data.mapped.vpfn / GPU_PAGES_PER_CPU_PAGE)
 				    << PAGE_SHIFT,
 			    PAGE_SIZE, 1);
 
-	ret = kbase_mmu_migrate_page(as_tagged(page_to_phys(old_page)),
-				     as_tagged(page_to_phys(new_page)), old_dma_addr, new_dma_addr,
-				     MIDGARD_MMU_BOTTOMLEVEL);
+	ret = kbase_mmu_migrate_data_page(as_tagged(page_to_phys(old_page)),
+					  as_tagged(page_to_phys(new_page)), old_dma_addr,
+					  new_dma_addr);
 
 	if (ret == 0) {
 		dma_unmap_page(kctx->kbdev->dev, old_dma_addr, PAGE_SIZE, DMA_BIDIRECTIONAL);
@@ -675,12 +681,12 @@ void kbase_mem_migrate_init(struct kbase_device *kbdev)
 	 */
 	if (kbase_page_migration_enabled < 0) {
 		if (kbase_is_large_pages_enabled())
-			static_branch_enable(&page_migration_static_key);
+			static_branch_inc(&page_migration_static_key);
 	} else {
 		dev_info(kbdev->dev, "Page migration support explicitly %s at insmod.",
 			 kbase_page_migration_enabled ? "enabled" : "disabled");
 		if (kbase_page_migration_enabled)
-			static_branch_enable(&page_migration_static_key);
+			static_branch_inc(&page_migration_static_key);
 	}
 
 	spin_lock_init(&mem_migrate->free_pages_lock);

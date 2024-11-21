@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2019-2023 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2024 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -132,11 +132,15 @@ static int kbase_backend_late_init(struct kbase_device *kbdev)
 
 fail_update_l2_features:
 	kbase_backend_devfreq_term(kbdev);
-fail_devfreq_init:
-	kbasep_pm_metrics_term(kbdev);
-fail_pm_metrics_init:
-	kbase_ipa_control_term(kbdev);
 
+fail_devfreq_init:
+	{
+		kbasep_pm_metrics_term(kbdev);
+	}
+fail_pm_metrics_init:
+	{
+		kbase_ipa_control_term(kbdev);
+	}
 #ifdef CONFIG_MALI_DEBUG
 #if IS_ENABLED(CONFIG_MALI_REAL_HW)
 fail_interrupt_test:
@@ -159,9 +163,11 @@ fail_reset_gpu_init:
  */
 static void kbase_backend_late_term(struct kbase_device *kbdev)
 {
-	kbase_backend_devfreq_term(kbdev);
-	kbasep_pm_metrics_term(kbdev);
-	kbase_ipa_control_term(kbdev);
+	{
+		kbase_backend_devfreq_term(kbdev);
+		kbasep_pm_metrics_term(kbdev);
+		kbase_ipa_control_term(kbdev);
+	}
 	kbase_hwaccess_pm_halt(kbdev);
 	kbase_reset_gpu_term(kbdev);
 	kbase_hwaccess_pm_term(kbdev);
@@ -340,6 +346,8 @@ static const struct kbase_device_init dev_init[] = {
 	{ kbase_gpuprops_populate_user_buffer, kbase_gpuprops_free_user_buffer,
 	  "GPU property population failed" },
 	{ kbase_device_late_init, kbase_device_late_term, "Late device initialization failed" },
+	{ kbase_pm_apc_init, kbase_pm_apc_term,
+	  "Asynchronous power control initialization failed" },
 #if IS_ENABLED(CONFIG_MALI_CORESIGHT)
 	{ kbase_debug_coresight_csf_init, kbase_debug_coresight_csf_term,
 	  "Coresight initialization failed" },

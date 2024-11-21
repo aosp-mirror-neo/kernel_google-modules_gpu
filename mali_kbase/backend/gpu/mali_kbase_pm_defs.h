@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2014-2023 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2014-2024 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -115,6 +115,27 @@ enum kbase_pm_runtime_suspend_abort_reason {
 	ABORT_REASON_NON_IDLE_CGS
 };
 
+/* The following indices point to the corresponding bits stored in
+ * &kbase_pm_backend_data.gpu_sleep_allowed. They denote the conditions that
+ * would be checked against to determine the level of support for GPU sleep
+ * and firmware sleep-on-idle.
+ */
+#define KBASE_GPU_SUPPORTS_GPU_SLEEP ((uint8_t)0)
+#define KBASE_GPU_SUPPORTS_FW_SLEEP_ON_IDLE ((uint8_t)1)
+#define KBASE_GPU_PERF_COUNTERS_COLLECTION_ENABLED ((uint8_t)2)
+#define KBASE_GPU_IGNORE_IDLE_EVENT ((uint8_t)3)
+#define KBASE_GPU_NON_IDLE_OFF_SLOT_GROUPS_AVAILABLE ((uint8_t)4)
+
+/* FW sleep-on-idle could be enabled if
+ * &kbase_pm_backend_data.gpu_sleep_allowed is equal to this value.
+ */
+#define KBASE_GPU_FW_SLEEP_ON_IDLE_ALLOWED                             \
+	((uint8_t)((1 << KBASE_GPU_SUPPORTS_GPU_SLEEP) |               \
+		   (1 << KBASE_GPU_SUPPORTS_FW_SLEEP_ON_IDLE) |        \
+		   (0 << KBASE_GPU_PERF_COUNTERS_COLLECTION_ENABLED) | \
+		   (0 << KBASE_GPU_IGNORE_IDLE_EVENT) |                \
+		   (0 << KBASE_GPU_NON_IDLE_OFF_SLOT_GROUPS_AVAILABLE)))
+
 /**
  * struct kbasep_pm_metrics - Metrics data collected for use by the power
  *                            management framework.
@@ -127,6 +148,8 @@ enum kbase_pm_runtime_suspend_abort_reason {
  *              time_period_start timestamp, measured in units of 256ns.
  *  @time_in_protm: The amount of time the GPU has spent in protected mode since
  *                  the time_period_start timestamp, measured in units of 256ns.
+ *  @busy_mcu: The amount of time MCU was busy measured in units of 256ns
+ *  @idle_mcu: The amount of time MCU was idle measured in units of 256ns
  *  @busy_cl: the amount of time the GPU was busy executing CL jobs. Note that
  *           if two CL jobs were active for 256ns, this value would be updated
  *           with 2 (2x256ns).
@@ -139,6 +162,8 @@ struct kbasep_pm_metrics {
 	u32 time_idle;
 #if MALI_USE_CSF
 	u32 time_in_protm;
+	u32 busy_mcu;
+	u32 idle_mcu;
 #else
 	u32 busy_cl[2];
 	u32 busy_gl;
@@ -249,6 +274,8 @@ union kbase_pm_policy_data {
  *                                .state is populated.
  * @KBASE_PM_LOG_EVENT_CORES: a transition of core availability.
  *                            .cores is populated.
+ * @KBASE_PM_LOG_EVENT_DVFS_CHANGE: a transition of DVFS frequency
+ *                                  .dvfs is populated.
  *
  * Each event log event has a type which determines the data it carries.
  */
@@ -257,7 +284,8 @@ enum kbase_pm_log_event_type {
 	KBASE_PM_LOG_EVENT_SHADERS_STATE,
 	KBASE_PM_LOG_EVENT_L2_STATE,
 	KBASE_PM_LOG_EVENT_MCU_STATE,
-	KBASE_PM_LOG_EVENT_CORES
+	KBASE_PM_LOG_EVENT_CORES,
+	KBASE_PM_LOG_EVENT_DVFS_CHANGE,
 };
 
 /**
@@ -275,6 +303,11 @@ struct kbase_pm_event_log_event {
 			u8 prev;
 		} state;
 		struct {
+			u64 domain;
+			u64 next;
+			u64 prev;
+		} dvfs;
+		struct {
 			u64 l2;
 			u64 shader;
 			u64 tiler;
@@ -286,7 +319,7 @@ struct kbase_pm_event_log_event {
 #define EVENT_LOG_MAX (PAGE_SIZE / sizeof(struct kbase_pm_event_log_event))
 
 struct kbase_pm_event_log {
-	u32 last_event;
+	atomic_t last_event;
 	struct kbase_pm_event_log_event events[EVENT_LOG_MAX];
 };
 
@@ -362,7 +395,7 @@ struct kbase_pm_event_log {
  *                                     called previously.
  *                                     See &struct kbase_pm_callback_conf.
  * @ca_cores_enabled: Cores that are currently available
- * @apply_hw_issue_TITANHW_2938_wa: Indicates if the workaround for BASE_HW_ISSUE_TITANHW_2938
+ * @apply_hw_issue_TITANHW_2938_wa: Indicates if the workaround for KBASE_HW_ISSUE_TITANHW_2938
  *                                  needs to be applied when unmapping memory from GPU.
  * @mcu_state: The current state of the micro-control unit, only applicable
  *             to GPUs that have such a component
@@ -390,7 +423,11 @@ struct kbase_pm_event_log {
  *                   cores may be different, but there should be transitions in
  *                   progress that will eventually achieve this state (assuming
  *                   that the policy doesn't change its mind in the mean time).
- * @mcu_desired: True if the micro-control unit should be powered on
+ * @mcu_desired: True if the micro-control unit should be powered on by the MCU state
+ *               machine. Updated as per the value of @mcu_poweron_required.
+ * @mcu_poweron_required: Boolean flag updated mainly by the CSF Scheduler code,
+ *                        before updating the PM active count, to indicate to the
+ *                        PM code that micro-control unit needs to be powered up/down.
  * @policy_change_clamp_state_to_off: Signaling the backend is in PM policy
  *                change transition, needs the mcu/L2 to be brought back to the
  *                off state and remain in that state until the flag is cleared.
@@ -404,10 +441,9 @@ struct kbase_pm_event_log {
  * @core_idle_work: Work item used to wait for undesired cores to become inactive.
  *                  The work item is enqueued when Host controls the power for
  *                  shader cores and down scaling of cores is performed.
- * @gpu_sleep_supported: Flag to indicate that if GPU sleep feature can be
- *                       supported by the kernel driver or not. If this
- *                       flag is not set, then HW state is directly saved
- *                       when GPU idle notification is received.
+ * @gpu_sleep_allowed: Bitmask to indicate the conditions that would be
+ *                     used to determine what support for GPU sleep is
+ *                     available.
  * @gpu_sleep_mode_active: Flag to indicate that the GPU needs to be in sleep
  *                         mode. It is set when the GPU idle notification is
  *                         received and is cleared when HW state has been
@@ -480,6 +516,7 @@ struct kbase_pm_event_log {
  * @gpu_clock_control_work: work item to set GPU clock during L2 power cycle
  *                          using gpu_clock_control
  * @event_log: data for the always-on event log
+ * @reset_in_progress: Set if reset is ongoing, otherwise set to 0
  *
  * This structure contains data for the power management framework. There is one
  * instance of this structure per device in the system.
@@ -545,6 +582,7 @@ struct kbase_pm_backend_data {
 	u64 shaders_desired_mask;
 #if MALI_USE_CSF
 	bool mcu_desired;
+	bool mcu_poweron_required;
 	bool policy_change_clamp_state_to_off;
 	unsigned int csf_pm_sched_flags;
 	struct mutex policy_change_lock;
@@ -552,7 +590,7 @@ struct kbase_pm_backend_data {
 	struct work_struct core_idle_work;
 
 #ifdef KBASE_PM_RUNTIME
-	bool gpu_sleep_supported;
+	unsigned long gpu_sleep_allowed;
 	bool gpu_sleep_mode_active;
 	bool exit_gpu_sleep_mode;
 	bool gpu_idled;
@@ -588,6 +626,7 @@ struct kbase_pm_backend_data {
 	struct work_struct gpu_clock_control_work;
 
 	struct kbase_pm_event_log event_log;
+	atomic_t reset_in_progress;
 };
 
 #if MALI_USE_CSF

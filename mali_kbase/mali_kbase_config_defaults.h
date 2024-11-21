@@ -188,7 +188,7 @@ enum {
  * Based on 75000ms timeout at nominal 100MHz, as is required for Android - based
  * on scaling from a 50MHz GPU system.
  */
-#define CSF_FIRMWARE_TIMEOUT_CYCLES (7500000000ull)
+#define CSF_FIRMWARE_TIMEOUT_CYCLES (((u64)7500000000) * KBASE_TIMEOUT_MULTIPLIER)
 
 /* Timeout in clock cycles for GPU Power Management to reach the desired
  * Shader, L2 and MCU state.
@@ -228,6 +228,19 @@ enum {
  */
 #define CSF_FIRMWARE_BOOT_TIMEOUT_CYCLES (25000000)
 
+/* Waiting timeout in clock cycles for GPU firmware to wake up from sleep.
+ *
+ * Based on 25ms timeout at 100MHz, scaled from a 50MHz GPU system.
+ */
+#define CSF_FIRMWARE_WAKE_UP_TIMEOUT_CYCLES (2500000)
+
+/* Waiting timeout in clock cycles for the MCU to become halted after FW has
+ * raised the GLB_IDLE IRQ in preparation for automatic sleeping.
+ *
+ * Based on 10ms timeout at 100MHz, scaled from a 50MHz GPU system.
+ */
+#define CSF_FIRMWARE_SOI_HALT_TIMEOUT_CYCLES (1000000)
+
 /* Waiting timeout for a ping request to be acknowledged, in clock cycles.
  *
  * Based on 6000ms timeout at 100MHz, scaled from a 50MHz GPU system.
@@ -238,7 +251,10 @@ enum {
  *
  * Based on 10s timeout at 100MHz, scaled from a 50MHz GPU system.
  */
-#if IS_ENABLED(CONFIG_MALI_IS_FPGA)
+#if IS_ENABLED(CONFIG_MALI_VECTOR_DUMP)
+/* Set a large value to avoid timing out while vector dumping */
+#define KCPU_FENCE_SIGNAL_TIMEOUT_CYCLES (250000000000ull)
+#elif IS_ENABLED(CONFIG_MALI_IS_FPGA)
 #define KCPU_FENCE_SIGNAL_TIMEOUT_CYCLES (2500000000ull)
 #else
 #define KCPU_FENCE_SIGNAL_TIMEOUT_CYCLES (1000000000ull)
@@ -264,6 +280,42 @@ enum {
  */
 #define DEFAULT_PROGRESS_TIMEOUT_CYCLES (2500000000ull)
 
+/* MIN value of iterators' suspend timeout*/
+#define CSG_SUSPEND_TIMEOUT_FIRMWARE_MS_MIN (200)
+#if CSG_SUSPEND_TIMEOUT_FIRMWARE_MS_MIN <= 0
+#error "CSG_SUSPEND_TIMEOUT_FIRMWARE_MS_MIN should be larger than 0"
+#endif
+
+/* MAX value of iterators' suspend timeout*/
+#define CSG_SUSPEND_TIMEOUT_FIRMWARE_MS_MAX (60000)
+#if CSG_SUSPEND_TIMEOUT_FIRMWARE_MS_MAX >= (0xFFFFFFFF)
+#error "CSG_SUSPEND_TIMEOUT_FIRMWARE_MS_MAX should be less than U32_MAX"
+#endif
+
+/* Firmware iterators' suspend timeout, default 4000ms. Customer can update this by
+ * using debugfs -- csg_suspend_timeout
+ */
+#if IS_ENABLED(CONFIG_MALI_REAL_HW) && !IS_ENABLED(CONFIG_MALI_IS_FPGA)
+#define CSG_SUSPEND_TIMEOUT_FIRMWARE_MS (4000)
+#else
+#define CSG_SUSPEND_TIMEOUT_FIRMWARE_MS (31000)
+#endif
+#if (CSG_SUSPEND_TIMEOUT_FIRMWARE_MS < CSG_SUSPEND_TIMEOUT_FIRMWARE_MS_MIN) || \
+	(CSG_SUSPEND_TIMEOUT_FIRMWARE_MS > CSG_SUSPEND_TIMEOUT_FIRMWARE_MS_MAX)
+#error "CSG_SUSPEND_TIMEOUT_FIRMWARE_MS is out of range"
+#endif
+
+/* Additional time in milliseconds added to the firmware iterators' suspend timeout,
+ * default 100ms
+ */
+#define CSG_SUSPEND_TIMEOUT_HOST_ADDED_MS (100)
+
+/* Host side CSG suspend timeout */
+#define CSG_SUSPEND_TIMEOUT_MS (CSG_SUSPEND_TIMEOUT_FIRMWARE_MS + CSG_SUSPEND_TIMEOUT_HOST_ADDED_MS)
+
+/* MAX allowed timeout value(ms) on host side, should be less than ANR timeout */
+#define MAX_TIMEOUT_MS (4500)
+
 #else /* MALI_USE_CSF */
 
 /* A default timeout in clock cycles to be used when an invalid timeout
@@ -274,7 +326,7 @@ enum {
 /* Default number of milliseconds given for other jobs on the GPU to be
  * soft-stopped when the GPU needs to be reset.
  */
-#define JM_DEFAULT_RESET_TIMEOUT_MS (3000) /* 3s */
+#define JM_DEFAULT_RESET_TIMEOUT_MS (3000 * KBASE_TIMEOUT_MULTIPLIER) /* 3s */
 
 /* Default timeout in clock cycles to be used when checking if JS_COMMAND_NEXT
  * is updated on HW side so a Job Slot is considered free.
@@ -335,14 +387,6 @@ enum {
  * which is 5 seconds (assuming the GPU is usually clocked at ~500 MHZ).
  */
 #define DEFAULT_PROGRESS_TIMEOUT ((u64)5 * 500 * 1024 * 1024)
-
-/* Default threshold at which to switch to incremental rendering
- *
- * Fraction of the maximum size of an allocation that grows on GPU page fault
- * that can be used up before the driver switches to incremental rendering,
- * in 256ths. 0 means disable incremental rendering.
- */
-#define DEFAULT_IR_THRESHOLD (192)
 
 /* Waiting time in clock cycles for the completion of a MMU operation.
  *

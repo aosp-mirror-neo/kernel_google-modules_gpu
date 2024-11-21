@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2019-2023 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2024 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -33,10 +33,6 @@
 #include <hwcnt/backend/mali_kbase_hwcnt_backend_jm.h>
 #include <hwcnt/backend/mali_kbase_hwcnt_backend_jm_watchdog.h>
 #include <backend/gpu/mali_kbase_model_linux.h>
-
-#ifdef CONFIG_MALI_ARBITER_SUPPORT
-#include <arbiter/mali_kbase_arbiter_pm.h>
-#endif
 
 #include <mali_kbase.h>
 #include <backend/gpu/mali_kbase_irq_internal.h>
@@ -224,9 +220,9 @@ static const struct kbase_device_init dev_init[] = {
 #if IS_ENABLED(CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD)
 	{ kbase_gpu_metrics_init, kbase_gpu_metrics_term, "GPU metrics initialization failed" },
 #endif /* IS_ENABLED(CONFIG_MALI_TRACE_POWER_GPU_WORK_PERIOD) */
+	{ power_control_init, power_control_term, "Power control initialization failed" },
 	{ kbase_device_io_history_init, kbase_device_io_history_term,
 	  "Register access history initialization failed" },
-	{ kbase_device_pm_init, kbase_device_pm_term, "Power management initialization failed" },
 	{ kbase_device_early_init, kbase_device_early_term, "Early device initialization failed" },
 	{ kbase_backend_time_init, NULL, "Time backend initialization failed" },
 	{ kbase_device_misc_init, kbase_device_misc_term,
@@ -281,6 +277,8 @@ static const struct kbase_device_init dev_init[] = {
 	  "GPU property population failed" },
 	{ NULL, kbase_dummy_job_wa_cleanup, NULL },
 	{ kbase_device_late_init, kbase_device_late_term, "Late device initialization failed" },
+	{ kbase_pm_apc_init, kbase_pm_apc_term,
+	  "Asynchronous power control initialization failed" },
 };
 
 static void kbase_device_term_partial(struct kbase_device *kbdev, unsigned int i)
@@ -293,7 +291,6 @@ static void kbase_device_term_partial(struct kbase_device *kbdev, unsigned int i
 
 void kbase_device_term(struct kbase_device *kbdev)
 {
-	kbase_pm_apc_term(kbdev);
 	kbase_device_term_partial(kbdev, ARRAY_SIZE(dev_init));
 	kbasep_js_devdata_halt(kbdev);
 	kbase_mem_halt(kbdev);
@@ -326,10 +323,6 @@ int kbase_device_init(struct kbase_device *kbdev)
 		return err;
 
 	err = kbase_kthread_run_worker_rt(kbdev, &kbdev->job_done_worker, "mali_jd_thread");
-	if (err)
-		return err;
-
-	err = kbase_pm_apc_init(kbdev);
 	if (err)
 		return err;
 

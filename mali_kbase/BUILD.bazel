@@ -13,7 +13,6 @@
 # along with this program; if not, you can access it online at
 # http://www.gnu.org/licenses/gpl-2.0.html.
 #
-#
 
 load(
     "//build/kernel/kleaf:kernel.bzl",
@@ -35,15 +34,18 @@ kernel_module(
         "**/*Makefile",
     ]) + [
         "//private/google-modules/gpu/common:headers",
+        "//private/google-modules/power/mitigation:headers",
         "//private/google-modules/soc/gs:gs_soc_headers",
     ],
     outs = _midgard_modules,
     kernel_build = "//private/google-modules/soc/gs:gs_kernel_build",
     visibility = [
+        "//private/devices/google:__subpackages__",
         "//private/google-modules/soc/gs:__pkg__",
     ],
     deps = [
         "//private/google-modules/gpu/mali_pixel",
+        "//private/google-modules/power/mitigation:bcl",
         "//private/google-modules/soc/gs:gs_soc_module",
     ],
 )

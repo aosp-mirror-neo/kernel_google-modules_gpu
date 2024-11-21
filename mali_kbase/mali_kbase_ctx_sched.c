@@ -186,8 +186,8 @@ void kbase_ctx_sched_release_ctx(struct kbase_context *kctx)
 
 	new_ref_count = atomic_dec_return(&kctx->refcount);
 	if (new_ref_count == 0) {
-		kbasep_platform_context_idle(kctx);
 		if (likely((kctx->as_nr >= 0) && (kctx->as_nr < BASE_MAX_NR_AS))) {
+			kbasep_platform_context_idle(kctx);
 			kbdev->as_free |= (1u << kctx->as_nr);
 			if (kbase_ctx_flag(kctx, KCTX_AS_DISABLED_ON_FAULT)) {
 				KBASE_TLSTREAM_TL_KBASE_CTX_UNASSIGN_AS(kbdev, kctx->id);

@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2023 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2023-2024 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -129,6 +129,25 @@ bool kbase_reg_is_valid(struct kbase_device *kbdev, u32 reg_enum);
 bool kbase_reg_is_accessible(struct kbase_device *kbdev, u32 reg_enum, u32 flags);
 
 /**
+ * kbase_reg_is_powered_access_allowed - check if registered is accessible given
+ * current power state
+ *
+ * @kbdev:    Kbase device pointer
+ * @reg_enum: Register enum
+ *
+ * Return: boolean if register is accessible
+ */
+bool kbase_reg_is_powered_access_allowed(struct kbase_device *kbdev, u32 reg_enum);
+
+/**
+ * kbase_reg_is_init - check if regmap is initialized
+ *
+ * @kbdev:     Kbase device pointer
+ * Return:     boolean if regmap is initialized
+ */
+bool kbase_reg_is_init(struct kbase_device *kbdev);
+
+/**
  * kbase_reg_get_offset - get register offset from enum
  * @kbdev:    Kbase device pointer
  * @reg_enum: Register enum
@@ -221,4 +240,31 @@ void kbase_regmap_term(struct kbase_device *kbdev);
 				 delay_before_read)                                 \
 	read_poll_timeout_atomic(kbase_reg_read64, val, cond, delay_us, timeout_us, \
 				 delay_before_read, kbdev, reg_enum)
+
+/**
+ * kbase_reg_gpu_irq_all - Return a mask for all GPU IRQ sources
+ * @is_legacy:       Indicates a legacy GPU IRQ mask.
+ *
+ * Return: a mask for all GPU IRQ sources.
+ *
+ * Note that the following sources are not included:
+ * CLEAN_CACHES_COMPLETED - Used separately for cache operation.
+ * DOORBELL_MIRROR - Do not have it included for GPU_IRQ_REG_COMMON
+ *                   as it can't be cleared by GPU_IRQ_CLEAR, thus interrupt storm might happen
+ */
+static inline u32 kbase_reg_gpu_irq_all(bool is_legacy)
+{
+	u32 mask = GPU_IRQ_REG_COMMON;
+
+	if (is_legacy) {
+#if MALI_USE_CSF
+		mask |= (RESET_COMPLETED | POWER_CHANGED_ALL);
+#endif /* MALI_USE_CSF */
+		/* Include POWER_CHANGED_SINGLE in debug builds for use in irq latency test. */
+		if (IS_ENABLED(CONFIG_MALI_DEBUG))
+			mask |= POWER_CHANGED_SINGLE;
+	}
+
+	return mask;
+}
 #endif /* _MALI_KBASE_HW_ACCESS_H_ */

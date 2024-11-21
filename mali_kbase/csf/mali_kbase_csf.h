@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2018-2023 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2018-2024 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -27,6 +27,7 @@
 #include "mali_kbase_csf_firmware.h"
 #include "mali_kbase_csf_protected_memory.h"
 #include "mali_kbase_hwaccess_time.h"
+#include <mali_kbase_defs.h>
 
 /* Indicate invalid CS h/w interface
  */
@@ -48,12 +49,6 @@
  */
 #define KBASEP_TICK_PROTM_PEND_SCAN_SEQ_NR_INVALID (U32_MAX)
 
-/* 60ms optimizes power while minimizing latency impact for UI test cases. */
-#define FIRMWARE_IDLE_HYSTERESIS_TIME_NS (60 * 1000 * 1000) /* Default 60 milliseconds */
-
-/* Idle hysteresis time can be scaled down when GPU sleep feature is used */
-#define FIRMWARE_IDLE_HYSTERESIS_GPU_SLEEP_SCALER (5)
-
 /**
  * kbase_csf_ctx_init - Initialize the CSF interface for a GPU address space.
  *
@@ -67,13 +62,18 @@ int kbase_csf_ctx_init(struct kbase_context *kctx);
  * kbase_csf_ctx_handle_fault - Terminate queue groups & notify fault upon
  *                              GPU bus fault, MMU page fault or similar.
  *
- * @kctx:       Pointer to faulty kbase context.
- * @fault:      Pointer to the fault.
+ * @kctx:            Pointer to faulty kbase context.
+ * @fault:           Pointer to the fault.
+ * @fw_unresponsive: Whether or not the FW is deemed unresponsive
  *
  * This function terminates all GPU command queue groups in the context and
- * notifies the event notification thread of the fault.
+ * notifies the event notification thread of the fault. If the FW is deemed
+ * unresponsive, e.g. when recovering from a GLB_FATAL, it will not wait
+ * for the groups to be terminated by the MCU, since in this case it will
+ * time-out anyway.
  */
-void kbase_csf_ctx_handle_fault(struct kbase_context *kctx, struct kbase_fault *fault);
+void kbase_csf_ctx_handle_fault(struct kbase_context *kctx, struct kbase_fault *fault,
+				bool fw_unresponsive);
 
 /**
  * kbase_csf_ctx_report_page_fault_for_active_groups - Notify Userspace about GPU page fault
@@ -335,13 +335,12 @@ void kbase_csf_interrupt(struct kbase_device *kbdev, u32 val);
  * kbase_csf_handle_csg_sync_update - Handle SYNC_UPDATE notification for the group.
  *
  * @kbdev: The kbase device to handle the SYNC_UPDATE interrupt.
- * @ginfo: Pointer to the CSG interface used by the @group
+ * @group_id: CSG index.
  * @group: Pointer to the GPU command queue group.
  * @req:   CSG_REQ register value corresponding to @group.
  * @ack:   CSG_ACK register value corresponding to @group.
  */
-void kbase_csf_handle_csg_sync_update(struct kbase_device *const kbdev,
-				      struct kbase_csf_cmd_stream_group_info *ginfo,
+void kbase_csf_handle_csg_sync_update(struct kbase_device *const kbdev, u32 group_id,
 				      struct kbase_queue_group *group, u32 req, u32 ack);
 
 /**
@@ -568,5 +567,14 @@ void kbase_csf_process_queue_kick(struct kbase_queue *queue);
  * Request to switch to protected mode.
  */
 void kbase_csf_process_protm_event_request(struct kbase_queue_group *group);
+
+/**
+ * kbase_csf_glb_fatal_worker - Worker function for handling GLB FATAL error
+ *
+ * @data: Pointer to a work_struct embedded in kbase device.
+ *
+ * Handle the GLB fatal error
+ */
+void kbase_csf_glb_fatal_worker(struct work_struct *const data);
 
 #endif /* _KBASE_CSF_H_ */

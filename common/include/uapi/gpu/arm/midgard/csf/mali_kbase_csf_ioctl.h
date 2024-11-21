@@ -108,10 +108,25 @@
  *   flags queryable.
  * 1.27:
  * - Implement support for HWC block state availability.
+ * 1.28:
+ * - Made the SAME_VA memory flag queryable.
+ * 1.29:
+ * - Re-allow child process to do supported file operations (like mmap, ioctl
+ *   read, poll) on the file descriptor of mali device that was inherited
+ *   from the parent process.
+ * 1.30:
+ * - Implement support for setting GPU Timestamp Offset register.
+ * 1.31:
+ * - Reject non-protected allocations containing the BASE_MEM_PROTECTED memory flag.
+ * - Reject allocations containing the BASE_MEM_DONT_NEED memory flag (it is only settable).
+ * - Reject allocations containing the BASE_MEM_UNUSED_BIT_xx memory flags.
+ * 1.32:
+ * - Add UNUSED_BIT_5 and UNUSED_BIT_7 previously occupied by kernel-only flags
+ *   to kbase cap table.
  */
 
 #define BASE_UK_VERSION_MAJOR 1
-#define BASE_UK_VERSION_MINOR 27
+#define BASE_UK_VERSION_MINOR 32
 
 /**
  * struct kbase_ioctl_version_check - Check version compatibility between
@@ -491,7 +506,7 @@ union kbase_ioctl_cs_tiler_heap_init {
 
 /**
  * union kbase_ioctl_cs_tiler_heap_init_1_13 - Initialize chunked tiler memory heap,
- *                                             earlier version upto 1.13
+ *                                             earlier version up to 1.13
  * @in:                Input parameters
  * @in.chunk_size:     Size of each chunk.
  * @in.initial_chunks: Initial number of chunks that heap will be created with.

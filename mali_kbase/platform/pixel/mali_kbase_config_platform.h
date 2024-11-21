@@ -37,7 +37,12 @@
  * Attached value: pointer to @ref kbase_pm_callback_conf
  * Default value: See @ref kbase_pm_callback_conf
  */
+#ifdef CONFIG_MALI_PIXEL_GPU_PM
 #define POWER_MANAGEMENT_CALLBACKS (&pm_callbacks)
+extern struct kbase_pm_callback_conf pm_callbacks;
+#else
+#define POWER_MANAGEMENT_CALLBACKS (NULL)
+#endif
 
 /**
  * Clock Rate Trace configuration functions
@@ -58,7 +63,6 @@ extern struct kbase_clk_rate_trace_op_conf pixel_clk_rate_trace_ops;
  */
 #define PLATFORM_FUNCS (&platform_funcs)
 
-extern struct kbase_pm_callback_conf pm_callbacks;
 extern struct kbase_platform_funcs_conf platform_funcs;
 
 #ifdef CONFIG_MALI_PIXEL_GPU_SECURE_RENDERING
@@ -89,7 +93,7 @@ extern struct protected_mode_ops pixel_protected_ops;
 
 /* SOC level includes */
 #if IS_ENABLED(CONFIG_GOOGLE_BCL)
-#include <soc/google/bcl.h>
+#include <bcl.h>
 #endif
 #if IS_ENABLED(CONFIG_EXYNOS_PD)
 #include <soc/google/exynos-pd.h>
@@ -108,7 +112,7 @@ extern struct protected_mode_ops pixel_protected_ops;
 #include "pixel_gpu_uevent.h"
 
 /* All port specific fields go here */
-#define OF_DATA_NUM_MAX 140
+#define OF_DATA_NUM_MAX 200
 #define CPU_FREQ_MAX INT_MAX
 
 enum gpu_power_state {
@@ -175,6 +179,10 @@ struct gpu_dvfs_opp_metrics {
  *                operating point.
  * @util_max:     The maximum threshold of utlization before the governor should consider moving to
  *                a higher operating point.
+ * @mcu_util_max: The maximum threshold of MCU utilization above which the
+ *                governor should consider moving to a higher OPP
+ * @mcu_util_min: The minimum value after which if the gpu utilisation is also
+ *                low, the DVFS should consider a lower OPP
  * @hysteresis:   A measure of how long the governor should keep the GPU at this operating point
  *                before moving to a lower one. For example, in the basic governor, this translates
  *                directly into &hr_timer ticks for the Mali DVFS utilization thread, but other
@@ -200,6 +208,8 @@ struct gpu_dvfs_opp {
 	int util_min;
 	int util_max;
 	int hysteresis;
+	int mcu_util_max;
+	int mcu_util_min;
 
 	/* Metrics */
 	struct gpu_dvfs_opp_metrics metrics;
@@ -223,6 +233,9 @@ struct gpu_dvfs_qos_vote;
 struct gpu_dvfs_metrics_uid_stats;
 #endif /* CONFIG_MALI_MIDGARD_DVFS */
 
+/* Forward declaration of gpu_uevent_ctx */
+struct gpu_uevent_ctx;
+
 /**
  * struct pixel_context - Pixel GPU context
  *
@@ -241,6 +254,13 @@ struct gpu_dvfs_metrics_uid_stats;
  * @pm.autosuspend_delay:       Delay (in ms) before PM runtime should trigger auto suspend on TOP
  *                              domain if use_autosuspend is true.
  * @pm.bcl_dev:                 Pointer to the Battery Current Limiter device.
+ * @pm.firmware_idle_hysteresis_time_ms The duration of the GPU idle hysteresis in milliseconds. Set via DT.
+ * @pm.firmware_idle_hysteresis_gpu_sleep_scaler Factor for calculating GPU idle hysteresis
+                                in case GPU sleep is enabled. &csf.gpu_idle_hysteresis_ms is eventually
+                                (firmware_idle_hysteresis_time_ms / firmware_idle_hysteresis_gpu_sleep_scaler).
+                                Set via DT.
+ * @pm.cores_suspend_hysteresis_time_ms Hysteresis timeout for suspending CORES domain. Set via DT.
+ * @pm.top_suspend_hysteresis_time_ms   Hysteresis timeout for suspending TOP domain. Set via DT.
  *
  * @tz_protection_enabled:      Storing the secure rendering state of the GPU. Access to this is
  *                              controlled by the HW access lock for the GPU associated with @kbdev.
@@ -252,6 +272,7 @@ struct gpu_dvfs_metrics_uid_stats;
  *                              incoming utilization data from the Mali driver into DVFS changes on
  *                              the GPU.
  * @dvfs.util:                  Stores incoming utilization metrics from the Mali driver.
+ * @dvfs.mcu_util:              Stores incoming MCU utilisation metrics.
  * @dvfs.util_gl:               Percentage of utilization from a non-OpenCL work
  * @dvfs.util_cl:               Percentage of utilization from a OpenCL work.
  * @dvfs.clockdown_wq:          Delayed workqueue for clocking down the GPU after it has been idle
@@ -329,8 +350,15 @@ struct pixel_context {
 #endif /* CONFIG_MALI_MIDGARD_DVFS */
 #if IS_ENABLED(CONFIG_GOOGLE_BCL)
 		struct bcl_device *bcl_dev;
+		struct notifier_block qos_nb;
 #endif
 		struct pixel_rail_state_log *rail_state_log;
+		unsigned int firmware_idle_hysteresis_time_ms;
+#ifdef CONFIG_MALI_PIXEL_GPU_SLEEP
+		unsigned int firmware_idle_hysteresis_gpu_sleep_scaler;
+		unsigned int cores_suspend_hysteresis_time_ms;
+		unsigned int top_suspend_hysteresis_time_ms;
+#endif /* CONFIG_MALI_PIXEL_GPU_SLEEP */
 	} pm;
 
 #ifdef CONFIG_MALI_PIXEL_GPU_SECURE_RENDERING
@@ -344,6 +372,7 @@ struct pixel_context {
 		struct workqueue_struct *control_wq;
 		struct work_struct control_work;
 		atomic_t util;
+		atomic_t mcu_util;
 #if !MALI_USE_CSF
 		atomic_t util_gl;
 		atomic_t util_cl;
@@ -360,6 +389,9 @@ struct pixel_context {
 		int table_size;
 		int step_up_val;
 		int level;
+#if MALI_USE_CSF
+		int level_before_headroom;
+#endif
 		int level_target;
 		int level_max;
 		int level_min;
@@ -367,6 +399,12 @@ struct pixel_context {
 		int level_scaling_min;
 		int level_scaling_compute_min;
 		struct gpu_dvfs_level_lock level_locks[GPU_DVFS_LEVEL_LOCK_COUNT];
+#if MALI_USE_CSF
+		u32 capacity_headroom;
+		u32 capacity_history[8];
+		u8 capacity_history_depth;
+		u8 capacity_history_index;
+#endif
 
 		struct {
 			enum gpu_dvfs_governor_type curr;
@@ -386,6 +424,14 @@ struct pixel_context {
 #endif /* !MALI_USE_CSF */
 			struct list_head uid_stats_list;
 		} metrics;
+#if MALI_USE_CSF
+		struct {
+			int mcu_protm_scale_num;
+			int mcu_protm_scale_den;
+			int mcu_down_util_scale_num;
+			int mcu_down_util_scale_den;
+		} tunable;
+#endif
 
 #ifdef CONFIG_MALI_PIXEL_GPU_QOS
 		struct {
@@ -427,6 +473,8 @@ struct pixel_context {
 #ifndef PIXEL_GPU_SLC_ACPM_SIGNAL
 	atomic_t slc_demand;
 #endif /* PIXEL_GPU_SLC_ACPM_SIGNAL */
+
+	struct gpu_uevent_ctx gpu_uevent_ctx;
 };
 
 /**

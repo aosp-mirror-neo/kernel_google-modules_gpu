@@ -20,6 +20,7 @@
 #include <linux/slab.h>
 #include <linux/version.h>
 #include <linux/limits.h>
+#include <soc/google/meminfo.h>
 
 #include <linux/memory_group_manager.h>
 
@@ -55,6 +56,8 @@ enum mgm_group_id
 	 */
 	MGM_IMPORTED_MEMORY_GROUP_ID = (MEMORY_GROUP_MANAGER_NR_GROUPS - 1),
 };
+
+static atomic64_t total_gpu_pages = ATOMIC64_INIT(0);
 
 #define INVALID_GROUP_ID(group_id) \
 	WARN_ON((group_id) >= MEMORY_GROUP_MANAGER_NR_GROUPS)
@@ -338,6 +341,16 @@ static struct kobj_type mgm_ktype = {
 	.default_groups = mgm_groups,
 };
 
+static unsigned long gpu_meminfo_size(void *private)
+{
+	return atomic64_read(&total_gpu_pages) << (PAGE_SHIFT - 10);
+}
+
+static struct meminfo gpu_meminfo = {
+	.name = "Gpu",
+	.size_kb = gpu_meminfo_size,
+};
+
 static int mgm_sysfs_init(struct mgm_groups *data)
 {
 	int ret;
@@ -351,11 +364,13 @@ static int mgm_sysfs_init(struct mgm_groups *data)
 		return ret;
 	}
 
+	register_meminfo(&gpu_meminfo);
 	return 0;
 }
 
 static void mgm_sysfs_term(struct mgm_groups *data)
 {
+	unregister_meminfo(&gpu_meminfo);
 	kobject_put(&data->kobj);
 }
 
@@ -370,8 +385,6 @@ static void mgm_sysfs_term(struct mgm_groups *data)
 {}
 
 #endif /* CONFIG_MALI_PIXEL_STATS */
-
-static atomic64_t total_gpu_pages = ATOMIC64_INIT(0);
 
 static atomic_t* get_size_counter(struct memory_group_manager_device* mgm_dev, unsigned int group_id, unsigned int order)
 {
@@ -483,14 +496,14 @@ static int mgm_get_import_memory_id(
 
 static u64 mgm_update_gpu_pte(
 	struct memory_group_manager_device *const mgm_dev, unsigned int const group_id,
-	int const mmu_level, u64 pte)
+	unsigned int pbha_id, unsigned int pte_flags, int const mmu_level, u64 pte)
 {
 	struct mgm_groups *const data = mgm_dev->data;
 	u64 const old_pte = pte;
 
 	dev_dbg(data->dev,
-		"%s(mgm_dev=%p, group_id=%u, mmu_level=%d, pte=0x%llx)\n",
-		__func__, (void *)mgm_dev, group_id, mmu_level, pte);
+		"%s(mgm_dev=%p, group_id=%u, pbha_id=%u, pte_flags=%u, mmu_level=%d, pte=0x%llx)\n",
+		__func__, (void *)mgm_dev, group_id, pbha_id, pte_flags, mmu_level, pte);
 
 	if (INVALID_GROUP_ID(group_id))
 		return pte;
