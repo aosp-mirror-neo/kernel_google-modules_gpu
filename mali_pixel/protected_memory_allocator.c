@@ -14,7 +14,7 @@
 #include <linux/protected_memory_allocator.h>
 #include <linux/slab.h>
 
-MODULE_IMPORT_NS(DMA_BUF);
+MODULE_IMPORT_NS("DMA_BUF");
 
 #define MALI_PMA_DMA_HEAP_NAME "vframe-secure"
 #define MALI_PMA_SLAB_SIZE (1 << 16)
