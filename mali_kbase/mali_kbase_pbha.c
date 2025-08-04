@@ -53,6 +53,12 @@ static bool read_setting_valid(unsigned int prod_model, unsigned int id, unsigne
 		if (prod_model == GPU_ID_PRODUCT_TTIX)
 			return false;
 		break;
+	case SYSC_ALLOC_ID_R_RT:
+	case SYSC_ALLOC_ID_R_NE_A:
+	case SYSC_ALLOC_ID_R_NE_N:
+		if (prod_model < GPU_ID_MODEL_MAKE(14, 0))
+			return false;
+		break;
 	default:
 		return false;
 	}
@@ -76,7 +82,6 @@ static bool read_setting_valid(unsigned int prod_model, unsigned int id, unsigne
 static bool write_setting_valid(unsigned int prod_model, unsigned int id,
 				unsigned int write_setting)
 {
-	CSTD_UNUSED(prod_model);
 	switch (id) {
 	/* Valid ID - fall through all */
 	case SYSC_ALLOC_ID_W_OTHER:
@@ -95,6 +100,12 @@ static bool write_setting_valid(unsigned int prod_model, unsigned int id,
 	case SYSC_ALLOC_ID_W_TIB_DS_AFBCH:
 	case SYSC_ALLOC_ID_W_TIB_DS_AFBCB:
 	case SYSC_ALLOC_ID_W_LSC:
+		break;
+	case SYSC_ALLOC_ID_W_RT:
+	case SYSC_ALLOC_ID_W_NE_A:
+	case SYSC_ALLOC_ID_W_NE_N:
+		if (prod_model < GPU_ID_MODEL_MAKE(14, 0))
+			return false;
 		break;
 	default:
 		return false;
@@ -372,7 +383,7 @@ static int kbase_pbha_read_mma_wa_id_property(struct kbase_device *kbdev,
 int kbase_pbha_read_dtb(struct kbase_device *kbdev)
 {
 #if MALI_USE_CSF
-	const struct device_node *pbha_node __free(device_node) = NULL;
+	struct device_node *pbha_node __free(device_node) = NULL;
 	int err;
 
 	if (!kbasep_pbha_supported(kbdev))
