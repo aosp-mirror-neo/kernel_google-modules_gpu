@@ -623,8 +623,7 @@ static inline unsigned long
 kbase_mm_get_unmapped_area_helper(struct mm_struct *mm, struct file *filp, unsigned long addr,
 				  unsigned long len, unsigned long pgoff, unsigned long flags)
 {
-/* TODO(b/473320391): Update to v6.19 after merge is completed. */
-#if (KERNEL_VERSION(6, 18, 0) <= LINUX_VERSION_CODE)
+#if (KERNEL_VERSION(6, 19, 0) <= LINUX_VERSION_CODE)
 	return mm_get_unmapped_area(filp, addr, len, pgoff, flags);
 #elif (KERNEL_VERSION(6, 10, 0) <= LINUX_VERSION_CODE)
 	return mm_get_unmapped_area(mm, filp, addr, len, pgoff, flags);
