@@ -176,7 +176,7 @@ static inline int kbase_fence_out_signal(struct kbase_jd_atom *katom, int status
 {
 	if (status)
 		dma_fence_set_error_helper(katom->dma_fence.fence, status);
-	return dma_fence_signal(katom->dma_fence.fence);
+	return dma_fence_check_and_signal(katom->dma_fence.fence) ? -EINVAL : 0;
 }
 
 #if IS_ENABLED(CONFIG_SYNC_FILE)
