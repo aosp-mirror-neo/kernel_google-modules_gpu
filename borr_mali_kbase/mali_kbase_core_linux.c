@@ -257,7 +257,7 @@ struct task_struct *kbase_kthread_run_rt(struct kbase_device *kbdev,
 		dev_warn(kbdev->dev, "RT thread name truncated to %s", name_buf);
 	}
 
-	task = kthread_create(threadfn, thread_param, name_buf);
+	task = kthread_create(threadfn, thread_param, "%s", name_buf);
 
 	if (!IS_ERR(task)) {
 		kbase_set_sched_rt(kbdev, task, name_buf);
@@ -284,7 +284,7 @@ int kbase_kthread_run_worker_rt(struct kbase_device *kbdev,
 
 	kthread_init_worker(worker);
 
-	task = kthread_create(kthread_worker_fn, worker, name_buf);
+	task = kthread_create(kthread_worker_fn, worker, "%s", name_buf);
 
 	if (!IS_ERR(task)) {
 		worker->task = task;
