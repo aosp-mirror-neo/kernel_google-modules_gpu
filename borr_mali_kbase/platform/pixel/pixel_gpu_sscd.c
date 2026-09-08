@@ -475,7 +475,7 @@ static void get_and_init_fw_core_dump(struct kbase_device *kbdev, struct sscd_se
 
 	fw_core_dump = (struct pixel_fw_core_dump *) seg->addr;
 
-	strncpy(fw_core_dump->magic, "fwcd", 4);
+	strtomem(fw_core_dump->magic, "fwcd");
 	memcpy(fw_core_dump->git_sha, fw_git_sha, BUILD_INFO_GIT_SHA_LEN);
 
 	// Dumping ELF header
