@@ -842,6 +842,7 @@ bool kbasep_adjust_prioritized_process(struct kbase_device *kbdev, bool add, uin
  *
  * Return: IS_ERR() on failure, or a valid task pointer.
  */
+__printf(4, 5)
 struct task_struct *kbase_kthread_run_rt(struct kbase_device *kbdev,
 	int (*threadfn)(void *data), void *thread_param, const char namefmt[], ...);
 
@@ -859,6 +860,7 @@ struct task_struct *kbase_kthread_run_rt(struct kbase_device *kbdev,
  *
  * Return: Zero on success, or an PTR_ERR on failure.
  */
+__printf(3, 4)
 int kbase_kthread_run_worker_rt(struct kbase_device *kbdev,
 	struct kthread_worker *worker, const char namefmt[], ...);
 
